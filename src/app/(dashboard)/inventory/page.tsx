@@ -125,7 +125,6 @@ export default function InventoryPage() {
 
   const [items, setItems] = useState<InventoryItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [importing, setImporting] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const [search, setSearch] = useState('');
@@ -259,29 +258,6 @@ export default function InventoryPage() {
     await fetchInventory();
   };
 
-  const handleImportApprovedInventory = async () => {
-    setImporting(true);
-    try {
-      const response = await fetch('/api/inventory', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'seedApprovedInventory' }),
-      });
-
-      const data = await response.json().catch(() => null);
-
-      if (!response.ok) {
-        alert(data?.error || 'تعذر إدراج الجرد المعتمد');
-        return;
-      }
-
-      await fetchInventory();
-      alert(`تمت مزامنة ${data?.total ?? 0} مادة بنجاح`);
-    } finally {
-      setImporting(false);
-    }
-  };
-
   const handleFormSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setSaving(true);
@@ -356,17 +332,6 @@ export default function InventoryPage() {
         </div>
 
         <div className="flex flex-wrap gap-3">
-          {canModify ? (
-            <Button
-              className="border border-[#016564]/20 bg-white text-[#016564] hover:bg-[#f4f8f8]"
-              variant="ghost"
-              onClick={handleImportApprovedInventory}
-              disabled={importing}
-            >
-              {importing ? 'جارٍ المزامنة...' : 'مزامنة المواد المعتمدة'}
-            </Button>
-          ) : null}
-
           {canModify ? (
             <Button
               className="bg-[#016564] text-white hover:bg-[#014b4a]"
