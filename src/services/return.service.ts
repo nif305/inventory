@@ -340,8 +340,8 @@ export const ReturnService = {
         nextAvailable <= 0
           ? ItemStatus.OUT_OF_STOCK
           : nextAvailable > item.minStock
-          ? ItemStatus.AVAILABLE
-          : ItemStatus.LOW_STOCK;
+            ? ItemStatus.AVAILABLE
+            : ItemStatus.LOW_STOCK;
 
       const result = await prisma.$transaction(async (tx) => {
         const updatedCustody = await tx.custodyRecord.update({
@@ -443,8 +443,8 @@ export const ReturnService = {
         nextAvailable <= 0
           ? ItemStatus.OUT_OF_STOCK
           : nextAvailable > item.minStock
-          ? ItemStatus.AVAILABLE
-          : ItemStatus.LOW_STOCK;
+            ? ItemStatus.AVAILABLE
+            : ItemStatus.LOW_STOCK;
 
       const result = await prisma.$transaction(async (tx) => {
         const updatedItem = await tx.inventoryItem.update({

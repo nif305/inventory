@@ -14,9 +14,6 @@ function mapRole(role: string): Role {
 async function resolveSessionUser(request: NextRequest) {
   const cookieId = decodeURIComponent(request.cookies.get('user_id')?.value || '').trim();
   const cookieEmail = decodeURIComponent(request.cookies.get('user_email')?.value || '').trim();
-  const cookieName = decodeURIComponent(
-    request.cookies.get('user_name')?.value || 'مستخدم النظام'
-  ).trim();
   const cookieDepartment = decodeURIComponent(
     request.cookies.get('user_department')?.value || 'إدارة عمليات التدريب'
   ).trim();
@@ -108,10 +105,10 @@ export async function GET(request: NextRequest) {
     );
   } catch (error: any) {
     const statusCode =
-      error.message === 'غير مصرح' || error.message === 'الحساب غير نشط' ? 401 : 500;
+      error?.message === 'غير مصرح' || error?.message === 'الحساب غير نشط' ? 401 : 500;
 
     return NextResponse.json(
-      { error: error.message || 'تعذر جلب طلبات الإرجاع' },
+      { error: error?.message || 'تعذر جلب طلبات الإرجاع' },
       { status: statusCode }
     );
   }
@@ -122,13 +119,41 @@ export async function POST(request: NextRequest) {
     const session = await resolveSessionUser(request);
     const body = await request.json();
 
-    if (!body?.custodyId) {
-      return NextResponse.json({ error: 'رقم العهدة مطلوب' }, { status: 400 });
+    const custodyId = String(body?.custodyId || '').trim();
+    const requestItemId = String(body?.requestItemId || '').trim();
+    const quantity =
+      body?.quantity === undefined || body?.quantity === null || body?.quantity === ''
+        ? undefined
+        : Number(body.quantity);
+
+    if (!custodyId && !requestItemId) {
+      return NextResponse.json(
+        { error: 'يجب تحديد العهدة أو بند الطلب للإرجاع' },
+        { status: 400 }
+      );
+    }
+
+    if (custodyId && requestItemId) {
+      return NextResponse.json(
+        { error: 'لا يمكن إرسال العهدة وبند الطلب معًا في نفس الطلب' },
+        { status: 400 }
+      );
+    }
+
+    if (requestItemId) {
+      if (!Number.isFinite(quantity) || Number(quantity) <= 0) {
+        return NextResponse.json(
+          { error: 'كمية الإرجاع مطلوبة ويجب أن تكون أكبر من صفر' },
+          { status: 400 }
+        );
+      }
     }
 
     return NextResponse.json(
       await ReturnService.create({
-        custodyId: body.custodyId,
+        custodyId: custodyId || undefined,
+        requestItemId: requestItemId || undefined,
+        quantity: requestItemId ? Math.floor(Number(quantity)) : undefined,
         userId: session.id,
         notes: body.notes || '',
         returnType: body.returnType,
@@ -140,10 +165,10 @@ export async function POST(request: NextRequest) {
     );
   } catch (error: any) {
     const statusCode =
-      error.message === 'غير مصرح' || error.message === 'الحساب غير نشط' ? 401 : 400;
+      error?.message === 'غير مصرح' || error?.message === 'الحساب غير نشط' ? 401 : 400;
 
     return NextResponse.json(
-      { error: error.message || 'تعذر إنشاء طلب الإرجاع' },
+      { error: error?.message || 'تعذر إنشاء طلب الإرجاع' },
       { status: statusCode }
     );
   }
@@ -187,10 +212,10 @@ export async function PUT(request: NextRequest) {
     return NextResponse.json({ error: 'إجراء غير صالح' }, { status: 400 });
   } catch (error: any) {
     const statusCode =
-      error.message === 'غير مصرح' || error.message === 'الحساب غير نشط' ? 401 : 400;
+      error?.message === 'غير مصرح' || error?.message === 'الحساب غير نشط' ? 401 : 400;
 
     return NextResponse.json(
-      { error: error.message || 'تعذر تنفيذ الإجراء' },
+      { error: error?.message || 'تعذر تنفيذ الإجراء' },
       { status: statusCode }
     );
   }
