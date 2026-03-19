@@ -25,18 +25,13 @@ export async function POST(request: NextRequest) {
 
     const user = await prisma.user.findUnique({
       where: { email },
+      include: {
+        undertaking: true,
+      },
     });
 
     if (!user) {
       return NextResponse.json({ error: 'بيانات الدخول غير صحيحة' }, { status: 401 });
-    }
-
-    if (user.status === 'PENDING') {
-      return NextResponse.json({ error: 'الحساب قيد المراجعة' }, { status: 403 });
-    }
-
-    if (user.status === 'REJECTED') {
-      return NextResponse.json({ error: 'تم رفض طلب هذا المستخدم' }, { status: 403 });
     }
 
     if (user.status === 'DISABLED') {
@@ -57,7 +52,7 @@ export async function POST(request: NextRequest) {
         fullName: user.fullName,
         email: user.email,
         mobile: user.mobile,
-        extension: '',
+        extension: user.jobTitle || '',
         department: user.department,
         jobTitle: user.jobTitle,
         operationalProject: user.department || '',
@@ -67,6 +62,12 @@ export async function POST(request: NextRequest) {
         createdAt: user.createdAt.toISOString(),
         lastLoginAt: nowIso,
         mustChangePassword: false,
+        undertaking: {
+          accepted: !!user.undertaking?.accepted,
+          acceptedAt: user.undertaking?.acceptedAt
+            ? user.undertaking.acceptedAt.toISOString()
+            : null,
+        },
       },
     });
 
