@@ -125,13 +125,14 @@ model Request {
 }
 
 model RequestItem {
-  id        String        @id @default(cuid())
-  requestId String
-  request   Request       @relation(fields: [requestId], references: [id], onDelete: Cascade)
-  itemId    String
-  item      InventoryItem @relation(fields: [itemId], references: [id])
-  quantity  Int
-  notes     String?
+  id             String          @id @default(cuid())
+  requestId      String
+  request        Request         @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  itemId         String
+  item           InventoryItem   @relation(fields: [itemId], references: [id])
+  quantity       Int
+  notes          String?
+  returnRequests ReturnRequest[]
 
   @@map("request_items")
 }
@@ -179,10 +180,19 @@ enum CustodyStatus {
 model ReturnRequest {
   id              String              @id @default(cuid())
   code            String              @unique
-  custodyId       String
-  custody         CustodyRecord       @relation(fields: [custodyId], references: [id])
+
+  custodyId       String?
+  custody         CustodyRecord?      @relation(fields: [custodyId], references: [id])
+
+  requestItemId   String?
+  requestItem     RequestItem?        @relation(fields: [requestItemId], references: [id])
+
   requesterId     String
   requester       User                @relation("RequestedReturns", fields: [requesterId], references: [id])
+
+  sourceType      ReturnSourceType    @default(CUSTODY)
+  quantity        Int                 @default(1)
+
   conditionNote   String?
   status          ReturnStatus        @default(PENDING)
   processedById   String?
@@ -199,6 +209,7 @@ model ReturnRequest {
   updatedAt       DateTime            @updatedAt
 
   @@index([custodyId])
+  @@index([requestItemId])
   @@index([requesterId])
   @@index([status])
   @@map("return_requests")
@@ -214,6 +225,11 @@ enum ReturnItemCondition {
   GOOD
   PARTIAL_DAMAGE
   TOTAL_DAMAGE
+}
+
+enum ReturnSourceType {
+  CUSTODY
+  REQUEST_ITEM
 }
 
 model MaintenanceRequest {
