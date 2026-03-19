@@ -1,6 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
+function normalizeText(value?: string | null) {
+  return (value || '').trim();
+}
+
+function normalizeEmail(value?: string | null) {
+  return (value || '').trim().toLowerCase();
+}
+
 function mapUser(user: any) {
   return {
     id: user.id,
@@ -8,7 +16,7 @@ function mapUser(user: any) {
     fullName: user.fullName,
     email: user.email,
     mobile: user.mobile,
-    extension: '',
+    extension: user.jobTitle || '',
     department: user.department,
     jobTitle: user.jobTitle,
     operationalProject: user.department,
@@ -50,12 +58,12 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
 
-    const fullName = String(body?.fullName || '').trim();
-    const email = String(body?.email || '').trim().toLowerCase();
-    const mobile = String(body?.mobile || '').trim();
-    const department = String(body?.department || 'وكالة التدريب').trim();
-    const jobTitle = String(body?.jobTitle || 'موظف').trim();
-    const password = String(body?.password || '').trim();
+    const fullName = normalizeText(body?.fullName);
+    const email = normalizeEmail(body?.email);
+    const mobile = normalizeText(body?.mobile);
+    const extension = normalizeText(body?.extension);
+    const operationalProject = normalizeText(body?.operationalProject);
+    const password = normalizeText(body?.password);
 
     if (!fullName || !email || !mobile || !password) {
       return NextResponse.json({ error: 'البيانات المطلوبة غير مكتملة' }, { status: 400 });
@@ -76,11 +84,11 @@ export async function POST(request: NextRequest) {
         fullName,
         email,
         mobile,
-        department,
-        jobTitle,
+        department: operationalProject || 'لا ينطبق',
+        jobTitle: extension || '',
         passwordHash: password,
         role: 'USER',
-        status: 'PENDING',
+        status: 'ACTIVE',
       },
       include: {
         undertaking: true,
