@@ -69,6 +69,7 @@ const defaultForm = {
   code: '',
   name: '',
   category: '',
+  type: 'RETURNABLE' as 'RETURNABLE' | 'CONSUMABLE',
   quantity: '0',
   unitPrice: '',
 };
@@ -118,6 +119,20 @@ const getDisplayCode = (item: InventoryItem) => {
   const categoryPrefix = categoryPrefixMap[item.category] || 'GEN';
   const typePrefix = item.type === 'RETURNABLE' ? 'R' : 'C';
   return `${categoryPrefix}-${typePrefix}-${extractNumericCode(item.code)}`;
+};
+
+const getTypeLabel = (type: 'RETURNABLE' | 'CONSUMABLE') =>
+  type === 'RETURNABLE' ? 'مسترجعة' : 'مستهلكة';
+
+const getGeneratedCodePreview = (
+  category: string,
+  type: 'RETURNABLE' | 'CONSUMABLE',
+  existingCode?: string,
+) => {
+  const categoryPrefix = categoryPrefixMap[category] || 'GEN';
+  const typePrefix = type === 'RETURNABLE' ? 'R' : 'C';
+  const numericPart = existingCode ? extractNumericCode(existingCode) : 'AUTO';
+  return `${categoryPrefix}-${typePrefix}-${numericPart}`;
 };
 
 const statCardClass =
@@ -212,6 +227,16 @@ export default function InventoryPage() {
     return quantity * unitPrice;
   }, [formState.quantity, formState.unitPrice]);
 
+  const generatedCodePreview = useMemo(
+    () =>
+      getGeneratedCodePreview(
+        formState.category,
+        formState.type,
+        selectedItem ? selectedItem.code : undefined,
+      ),
+    [formState.category, formState.type, selectedItem],
+  );
+
   const getStatusBadge = (status: InventoryItem['status']) => {
     if (status === 'LOW_STOCK') return <Badge variant="warning">منخفض لكنه متاح</Badge>;
     if (status === 'OUT_OF_STOCK') return <Badge variant="danger">نافد</Badge>;
@@ -230,6 +255,7 @@ export default function InventoryPage() {
       code: item.code || '',
       name: item.name || '',
       category: item.category || '',
+      type: item.type || 'RETURNABLE',
       quantity: String(item.quantity ?? 0),
       unitPrice:
         item.unitPrice === null || item.unitPrice === undefined ? '' : String(item.unitPrice),
@@ -267,9 +293,10 @@ export default function InventoryPage() {
 
     try {
       const payload = {
-        code: formState.code,
+        code: selectedItem ? formState.code : undefined,
         name: formState.name,
         category: formState.category,
+        type: formState.type,
         quantity: Number(formState.quantity || 0),
         unitPrice: formState.unitPrice === '' ? null : Number(formState.unitPrice),
         financialTracking: formState.unitPrice !== '',
@@ -441,7 +468,7 @@ export default function InventoryPage() {
                     <div>
                       <p className="text-[11px] text-slate-500">النوع</p>
                       <p className="mt-1 text-[13px] font-semibold text-slate-800">
-                        {item.type === 'RETURNABLE' ? 'مسترجعة' : 'مستهلكة'}
+                        {getTypeLabel(item.type)}
                       </p>
                     </div>
                     <div>
@@ -541,9 +568,7 @@ export default function InventoryPage() {
                         </div>
                       </td>
 
-                      <td className="p-4 text-sm text-slate-700">
-                        {item.type === 'RETURNABLE' ? 'مسترجعة' : 'مستهلكة'}
-                      </td>
+                      <td className="p-4 text-sm text-slate-700">{getTypeLabel(item.type)}</td>
 
                       <td className="p-4 text-sm font-bold text-slate-800">
                         {formatNumber(item.quantity)} {item.unit}
@@ -641,12 +666,13 @@ export default function InventoryPage() {
       >
         <form onSubmit={handleFormSubmit} className="space-y-5">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            <Input
-              label="رمز المادة"
-              value={formState.code}
-              onChange={(e) => setFormState((prev) => ({ ...prev, code: e.target.value }))}
-              required
-            />
+            <div className="md:col-span-2 rounded-2xl border border-[#d6e4e4] bg-[#f7fbfb] p-4">
+              <p className="text-sm font-semibold text-slate-600">الرمز التلقائي</p>
+              <p className="mt-2 text-lg font-extrabold text-[#016564]">{generatedCodePreview}</p>
+              <p className="mt-1 text-xs text-slate-500">
+                يتم توليد الرمز تلقائيًا من النظام حسب الفئة ونوع المادة
+              </p>
+            </div>
 
             <Input
               label="اسم المادة"
@@ -662,6 +688,24 @@ export default function InventoryPage() {
               list="inventory-categories"
               required
             />
+
+            <div>
+              <label className="mb-2 block text-sm font-semibold text-slate-700">نوع المادة</label>
+              <select
+                value={formState.type}
+                onChange={(e) =>
+                  setFormState((prev) => ({
+                    ...prev,
+                    type: e.target.value as 'RETURNABLE' | 'CONSUMABLE',
+                  }))
+                }
+                className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-900 outline-none transition focus:border-[#016564] focus:ring-4 focus:ring-[#016564]/10"
+                required
+              >
+                <option value="RETURNABLE">مسترجعة</option>
+                <option value="CONSUMABLE">مستهلكة</option>
+              </select>
+            </div>
 
             <Input
               label="الكمية"
