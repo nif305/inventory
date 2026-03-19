@@ -2,290 +2,203 @@
 
 import React, {
   createContext,
-  useContext,
-  useState,
-  useEffect,
   useCallback,
+  useContext,
+  useEffect,
   useMemo,
+  useState,
 } from 'react';
-import { useRouter } from 'next/navigation';
-import { User, AppRole, AppStatus } from '@/features/auth/types/auth.types';
 
-interface UserUpdateInput {
-  fullName?: string;
-  email?: string;
+type Role = 'manager' | 'warehouse' | 'user';
+type Status = 'active' | 'disabled';
+
+export type AppUser = {
+  id: string;
+  employeeId?: string;
+  fullName: string;
+  email: string;
   mobile?: string;
   extension?: string;
   department?: string;
   jobTitle?: string;
   operationalProject?: string;
-  role?: AppRole;
-  status?: AppStatus;
-}
+  role: Role;
+  status: Status;
+  avatar?: string | null;
+  createdAt?: string | null;
+  lastLoginAt?: string | null;
+  mustChangePassword?: boolean;
+};
 
-interface AuthContextType {
-  user: User | null;
-  isLoading: boolean;
-  login: (identifier: string, password: string) => Promise<void>;
-  logout: () => void;
-  allUsers: User[];
-  approveUser: (userId: string) => void;
-  rejectUser: (userId: string) => void;
-  activateUser: (userId: string) => void;
-  disableUser: (userId: string) => void;
-  archiveUser: (userId: string) => void;
-  changeUserRole: (userId: string, role: AppRole) => void;
-  updateUserProfile: (userId: string, updates: UserUpdateInput) => { ok: boolean; message?: string };
-  resetUserPassword: (
-    userId: string,
-    newPassword?: string
-  ) => { ok: boolean; password?: string; message?: string };
-  setUserMustChangePassword: (userId: string, value: boolean) => { ok: boolean; message?: string };
-  switchViewRole: (role: 'manager' | 'warehouse' | 'user') => void;
-  resetViewRole: () => void;
-  originalUser: User | null;
+type LoginResponse = {
+  data?: AppUser;
+  error?: string;
+};
+
+type AuthContextType = {
+  user: AppUser | null;
+  originalUser: AppUser | null;
+  allUsers: AppUser[];
+  loading: boolean;
+  isAuthenticated: boolean;
   canUseRoleSwitch: boolean;
-  canManageUsers: boolean;
-}
+  login: (email: string, password: string) => Promise<void>;
+  logout: () => void;
+  refreshUsers: () => Promise<void>;
+  switchViewRole: (role: Role) => void;
+};
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-function normalizeEmail(value?: string | null) {
-  return (value || '').trim().toLowerCase();
+const AUTH_STORAGE_KEY = 'inventory-auth-user';
+const AUTH_ORIGINAL_STORAGE_KEY = 'inventory-auth-original-user';
+
+function normalizeRole(role?: string | null): Role {
+  const value = (role || '').toLowerCase();
+  if (value === 'manager') return 'manager';
+  if (value === 'warehouse') return 'warehouse';
+  return 'user';
 }
 
-export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [originalUser, setOriginalUser] = useState<User | null>(null);
-  const [allUsers, setAllUsers] = useState<User[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [viewRole, setViewRole] = useState<'manager' | 'warehouse' | 'user' | null>(null);
-  const router = useRouter();
+function normalizeStatus(status?: string | null): Status {
+  const value = (status || '').toLowerCase();
+  if (value === 'disabled') return 'disabled';
+  return 'active';
+}
 
-  const fetchSessionUser = useCallback(async () => {
-    const response = await fetch('/api/auth/me', {
-      method: 'GET',
-      cache: 'no-store',
-    });
+function normalizeUser(user: any): AppUser {
+  return {
+    id: user?.id || '',
+    employeeId: user?.employeeId || '',
+    fullName: user?.fullName || '',
+    email: user?.email || '',
+    mobile: user?.mobile || '',
+    extension: user?.extension || '',
+    department: user?.department || '',
+    jobTitle: user?.jobTitle || '',
+    operationalProject: user?.operationalProject || user?.department || '',
+    role: normalizeRole(user?.role),
+    status: normalizeStatus(user?.status),
+    avatar: user?.avatar || null,
+    createdAt: user?.createdAt || null,
+    lastLoginAt: user?.lastLoginAt || null,
+    mustChangePassword: !!user?.mustChangePassword,
+  };
+}
 
-    if (!response.ok) {
-      setUser(null);
-      setOriginalUser(null);
-      return null;
-    }
+function saveAuthUser(user: AppUser | null) {
+  if (typeof window === 'undefined') return;
 
-    const data = await response.json().catch(() => null);
-    const sessionUser = data?.user || null;
+  if (!user) {
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+    return;
+  }
 
-    if (!sessionUser) {
-      setUser(null);
-      setOriginalUser(null);
-      return null;
-    }
+  localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(user));
+}
 
-    setOriginalUser(sessionUser);
+function saveOriginalAuthUser(user: AppUser | null) {
+  if (typeof window === 'undefined') return;
 
-    if (
-      viewRole &&
-      ((sessionUser.role === 'manager' && (viewRole === 'manager' || viewRole === 'user')) ||
-        (sessionUser.role === 'warehouse' &&
-          (viewRole === 'warehouse' || viewRole === 'user')))
-    ) {
-      setUser({ ...sessionUser, role: viewRole });
-    } else {
-      setUser(sessionUser);
-    }
+  if (!user) {
+    localStorage.removeItem(AUTH_ORIGINAL_STORAGE_KEY);
+    return;
+  }
 
-    return sessionUser;
-  }, [viewRole]);
+  localStorage.setItem(AUTH_ORIGINAL_STORAGE_KEY, JSON.stringify(user));
+}
 
-  const fetchUsers = useCallback(async () => {
-    const response = await fetch('/api/users', {
-      method: 'GET',
-      cache: 'no-store',
-    });
+function loadStoredUser(key: string): AppUser | null {
+  if (typeof window === 'undefined') return null;
 
-    if (!response.ok) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    return normalizeUser(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const [user, setUser] = useState<AppUser | null>(null);
+  const [originalUser, setOriginalUser] = useState<AppUser | null>(null);
+  const [allUsers, setAllUsers] = useState<AppUser[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const refreshUsers = useCallback(async () => {
+    try {
+      const res = await fetch('/api/users', { cache: 'no-store' });
+      const json = await res.json().catch(() => null);
+      const rows = Array.isArray(json?.data) ? json.data.map(normalizeUser) : [];
+      setAllUsers(rows);
+    } catch {
       setAllUsers([]);
-      return [];
     }
-
-    const data = await response.json().catch(() => null);
-    const users = Array.isArray(data?.data) ? data.data : [];
-    setAllUsers(users);
-    return users;
   }, []);
-
-  const refreshAll = useCallback(async () => {
-    const sessionUser = await fetchSessionUser();
-    if (sessionUser?.role === 'manager') {
-      await fetchUsers();
-    } else {
-      setAllUsers([]);
-    }
-  }, [fetchSessionUser, fetchUsers]);
 
   useEffect(() => {
-    const init = async () => {
-      setIsLoading(true);
-      try {
-        await refreshAll();
-      } finally {
-        setIsLoading(false);
-      }
-    };
+    const storedUser = loadStoredUser(AUTH_STORAGE_KEY);
+    const storedOriginalUser = loadStoredUser(AUTH_ORIGINAL_STORAGE_KEY);
 
-    init();
-  }, [refreshAll]);
-
-  const login = useCallback(async (identifier: string, password: string) => {
-    setIsLoading(true);
-
-    try {
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: normalizeEmail(identifier), password }),
-      });
-
-      const data = await response.json().catch(() => null);
-
-      if (!response.ok) {
-        throw new Error(data?.error || 'تعذر تسجيل الدخول');
-      }
-
-      setViewRole(null);
-      await refreshAll();
-      window.location.replace('/dashboard');
-    } finally {
-      setIsLoading(false);
+    if (storedUser) {
+      setUser(storedUser);
     }
-  }, [refreshAll]);
 
-  const logout = useCallback(async () => {
-    setIsLoading(true);
-
-    try {
-      await fetch('/api/auth/logout', {
-        method: 'POST',
-      });
-    } finally {
-      setViewRole(null);
-      setUser(null);
-      setOriginalUser(null);
-      setAllUsers([]);
-      window.location.replace('/login');
+    if (storedOriginalUser) {
+      setOriginalUser(storedOriginalUser);
+    } else if (storedUser) {
+      setOriginalUser(storedUser);
+      saveOriginalAuthUser(storedUser);
     }
+
+    setLoading(false);
   }, []);
 
-  const runUserAction = useCallback(
-    async (userId: string, body: Record<string, unknown>) => {
-      const response = await fetch(`/api/users/${userId}/actions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
+  useEffect(() => {
+    if (user) {
+      refreshUsers();
+    }
+  }, [user, refreshUsers]);
 
-      const data = await response.json().catch(() => null);
-
-      if (!response.ok) {
-        throw new Error(data?.error || 'تعذر تنفيذ العملية');
-      }
-
-      await refreshAll();
-      return data;
-    },
-    [refreshAll]
-  );
-
-  const approveUser = useCallback((userId: string) => {
-    runUserAction(userId, { action: 'approve' }).catch((error) => {
-      alert(error.message || 'تعذر الاعتماد');
+  const login = useCallback(async (email: string, password: string) => {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
     });
-  }, [runUserAction]);
 
-  const rejectUser = useCallback((userId: string) => {
-    runUserAction(userId, { action: 'reject' }).catch((error) => {
-      alert(error.message || 'تعذر الرفض');
-    });
-  }, [runUserAction]);
+    const json: LoginResponse = await res.json().catch(() => ({
+      error: 'تعذر تسجيل الدخول',
+    }));
 
-  const activateUser = useCallback((userId: string) => {
-    runUserAction(userId, { action: 'activate' }).catch((error) => {
-      alert(error.message || 'تعذر التفعيل');
-    });
-  }, [runUserAction]);
+    if (!res.ok || !json?.data) {
+      throw new Error(json?.error || 'تعذر تسجيل الدخول');
+    }
 
-  const disableUser = useCallback((userId: string) => {
-    runUserAction(userId, { action: 'disable' }).catch((error) => {
-      alert(error.message || 'تعذر الإيقاف');
-    });
-  }, [runUserAction]);
+    const normalized = normalizeUser(json.data);
 
-  const archiveUser = useCallback((userId: string) => {
-    runUserAction(userId, { action: 'archive' }).catch((error) => {
-      alert(error.message || 'تعذر الأرشفة');
-    });
-  }, [runUserAction]);
+    if (normalized.status === 'disabled') {
+      throw new Error('الحساب موقوف. يرجى التواصل مع المدير.');
+    }
 
-  const changeUserRole = useCallback((userId: string, role: AppRole) => {
-    runUserAction(userId, { action: 'change-role', role }).catch((error) => {
-      alert(error.message || 'تعذر تغيير الدور');
-    });
-  }, [runUserAction]);
+    setUser(normalized);
+    setOriginalUser(normalized);
+    saveAuthUser(normalized);
+    saveOriginalAuthUser(normalized);
+  }, []);
 
-  const updateUserProfile = useCallback(
-    (userId: string, updates: UserUpdateInput) => {
-      fetch(`/api/users/${userId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
-      })
-        .then(async (response) => {
-          const data = await response.json().catch(() => null);
-          if (!response.ok) {
-            throw new Error(data?.error || 'تعذر تحديث المستخدم');
-          }
-          await refreshAll();
-        })
-        .catch((error) => {
-          alert(error.message || 'تعذر تحديث المستخدم');
-        });
-
-      return { ok: true };
-    },
-    [refreshAll]
-  );
-
-  const resetUserPassword = useCallback(
-    (userId: string, newPassword?: string) => {
-      const password = (newPassword || '').trim();
-
-      if (password && password.length < 6) {
-        return { ok: false, message: 'كلمة المرور الجديدة قصيرة جدًا' };
-      }
-
-      runUserAction(userId, { action: 'reset-password', password })
-        .then((data) => {
-          if (!password && data?.password) {
-            alert(`تمت إعادة التعيين. كلمة المرور الجديدة: ${data.password}`);
-          }
-        })
-        .catch((error) => {
-          alert(error.message || 'تعذر إعادة تعيين كلمة المرور');
-        });
-
-      return { ok: true, password: password || undefined };
-    },
-    [runUserAction]
-  );
-
-  const setUserMustChangePassword = useCallback(() => {
-    return { ok: false, message: 'غير مدعوم حاليًا' };
+  const logout = useCallback(() => {
+    setUser(null);
+    setOriginalUser(null);
+    setAllUsers([]);
+    saveAuthUser(null);
+    saveOriginalAuthUser(null);
+    window.location.href = '/login';
   }, []);
 
   const switchViewRole = useCallback(
-    (role: 'manager' | 'warehouse' | 'user') => {
+    (role: Role) => {
       if (!originalUser) return;
 
       const allowed =
@@ -294,68 +207,39 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
       if (!allowed) return;
 
-      setViewRole(role);
-      setUser({ ...originalUser, role });
-      router.replace('/dashboard');
+      const nextUser = { ...originalUser, role };
+      setUser(nextUser);
+      saveAuthUser(nextUser);
     },
-    [originalUser, router]
+    [originalUser]
   );
 
-  const resetViewRole = useCallback(() => {
-    if (!originalUser) return;
-    setViewRole(null);
-    setUser(originalUser);
-    router.replace('/dashboard');
-  }, [originalUser, router]);
+  const value = useMemo<AuthContextType>(
+    () => ({
+      user,
+      originalUser,
+      allUsers,
+      loading,
+      isAuthenticated: !!user,
+      canUseRoleSwitch:
+        originalUser?.role === 'manager' || originalUser?.role === 'warehouse',
+      login,
+      logout,
+      refreshUsers,
+      switchViewRole,
+    }),
+    [user, originalUser, allUsers, loading, login, logout, refreshUsers, switchViewRole]
+  );
 
-  const canUseRoleSwitch = useMemo(() => {
-    if (!originalUser || originalUser.status !== 'active') return false;
-    return originalUser.role === 'manager' || originalUser.role === 'warehouse';
-  }, [originalUser]);
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
 
-  const canManageUsers = useMemo(() => {
-    return originalUser?.role === 'manager' && originalUser?.status === 'active';
-  }, [originalUser]);
+export function useAuth() {
+  const context = useContext(AuthContext);
 
-  if (isLoading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-surface text-primary">
-        جاري التحميل...
-      </div>
-    );
+  if (!context) {
+    throw new Error('useAuth must be used within AuthProvider');
   }
 
-  return (
-    <AuthContext.Provider
-      value={{
-        user,
-        isLoading,
-        login,
-        logout,
-        allUsers,
-        approveUser,
-        rejectUser,
-        activateUser,
-        disableUser,
-        archiveUser,
-        changeUserRole,
-        updateUserProfile,
-        resetUserPassword,
-        setUserMustChangePassword,
-        switchViewRole,
-        resetViewRole,
-        originalUser,
-        canUseRoleSwitch,
-        canManageUsers,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
-  );
-};
-
-export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (!context) throw new Error('useAuth must be used within AuthProvider');
   return context;
-};
+}

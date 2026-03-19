@@ -59,7 +59,7 @@ export default function RequestAccountPage() {
       const data = await response.json().catch(() => null);
 
       if (!response.ok) {
-        setError(data?.error || 'تعذر إرسال الطلب');
+        setError(data?.error || 'تعذر إنشاء الحساب');
         return;
       }
 
@@ -104,9 +104,9 @@ export default function RequestAccountPage() {
 
             <div className="rounded-[20px] border border-white/10 bg-white/10 px-5 py-3 shadow-[0_12px_28px_rgba(0,0,0,0.12)] backdrop-blur-xl">
               <p className="text-[18px] font-normal leading-[1.7]">
-                طلب إنشاء حساب جديد
+                إنشاء حساب جديد
                 <br />
-                لمنصة إدارة المخزون
+                والدخول مباشرة إلى المنصة
               </p>
             </div>
           </div>
@@ -131,9 +131,9 @@ export default function RequestAccountPage() {
 
                 <div className="mt-4 rounded-[20px] border border-white/10 bg-white/10 px-4 py-4 text-center text-white sm:rounded-[22px]">
                   <p className="text-lg font-normal leading-[1.8] sm:text-2xl sm:leading-[1.7]">
-                    طلب إنشاء حساب جديد
+                    إنشاء حساب جديد
                     <br />
-                    لمنصة إدارة المخزون
+                    والدخول مباشرة إلى المنصة
                   </p>
                 </div>
               </div>
@@ -142,20 +142,20 @@ export default function RequestAccountPage() {
             <div className="rounded-[26px] border border-white/80 bg-white/95 p-4 shadow-[0_12px_32px_rgba(15,23,42,0.07)] backdrop-blur-xl sm:rounded-[30px] sm:p-6">
               <div className="mb-5 text-center">
                 <h1 className="text-[26px] font-normal text-[#0f1d3b] sm:text-[34px]">
-                  طلب إنشاء حساب
+                  إنشاء حساب
                 </h1>
               </div>
 
               {submitted ? (
                 <div className="space-y-3 rounded-[16px] border border-emerald-200 bg-emerald-50 px-4 py-4 text-center">
                   <div className="text-[14px] leading-7 text-emerald-700">
-                    تم إرسال الطلب بنجاح، وسيظهر للمدير بحالة قيد المراجعة.
+                    تم إنشاء الحساب بنجاح. يمكنك الآن تسجيل الدخول واستخدام المنصة مباشرة.
                   </div>
                   <Link
                     href="/login"
                     className="inline-flex min-h-[44px] items-center justify-center rounded-[14px] bg-[#016564] px-4 py-2 text-[14px] text-white"
                   >
-                    العودة لتسجيل الدخول
+                    الانتقال إلى تسجيل الدخول
                   </Link>
                 </div>
               ) : (
@@ -275,7 +275,7 @@ export default function RequestAccountPage() {
                     }
                     className="flex min-h-[50px] w-full items-center justify-center rounded-[16px] bg-[#0b8a88] px-4 text-[15px] text-white shadow-[0_10px_22px_rgba(11,138,136,0.16)] transition hover:brightness-95 disabled:cursor-not-allowed disabled:opacity-70"
                   >
-                    {loading ? 'جارٍ الإرسال...' : 'إرسال الطلب'}
+                    {loading ? 'جارٍ إنشاء الحساب...' : 'إنشاء الحساب'}
                   </button>
                 </form>
               )}

@@ -1,12 +1,38 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
+function normalizeText(value?: string | null) {
+  return (value || '').trim();
+}
+
 function normalizeEmail(value?: string | null) {
   return (value || '').trim().toLowerCase();
 }
 
-function normalizeText(value?: string | null) {
-  return (value || '').trim();
+function mapUser(user: any) {
+  return {
+    id: user.id,
+    employeeId: user.employeeId,
+    fullName: user.fullName,
+    email: user.email,
+    mobile: user.mobile,
+    extension: '',
+    department: user.department,
+    jobTitle: user.jobTitle,
+    operationalProject: user.department,
+    role: user.role.toLowerCase(),
+    status: user.status.toLowerCase(),
+    avatar: user.avatar,
+    undertaking: {
+      accepted: !!user.undertaking?.accepted,
+      acceptedAt: user.undertaking?.acceptedAt
+        ? user.undertaking.acceptedAt.toISOString()
+        : null,
+    },
+    createdAt: user.createdAt?.toISOString?.() || null,
+    lastLoginAt: null,
+    mustChangePassword: false,
+  };
 }
 
 export async function POST(request: NextRequest) {
@@ -19,58 +45,67 @@ export async function POST(request: NextRequest) {
     const extension = normalizeText(body?.extension);
     const operationalProject = normalizeText(body?.operationalProject);
     const password = normalizeText(body?.password);
-    const undertakingAccepted = Boolean(body?.undertakingAccepted);
+    const undertakingAccepted = !!body?.undertakingAccepted;
 
-    if (!fullName || !email || !mobile || !operationalProject || !password) {
-      return NextResponse.json({ error: 'البيانات المطلوبة غير مكتملة' }, { status: 400 });
+    if (!fullName || !email || !mobile || !password) {
+      return NextResponse.json(
+        { error: 'الاسم والبريد والجوال وكلمة المرور مطلوبة' },
+        { status: 400 }
+      );
     }
 
     if (!undertakingAccepted) {
-      return NextResponse.json({ error: 'يجب قبول التعهد قبل إرسال الطلب' }, { status: 400 });
+      return NextResponse.json(
+        { error: 'يجب قبول التعهد قبل إنشاء الحساب' },
+        { status: 400 }
+      );
     }
 
-    const existingUser = await prisma.user.findUnique({
-      where: { email },
+    const existingUser = await prisma.user.findFirst({
+      where: {
+        email,
+      },
     });
 
     if (existingUser) {
       return NextResponse.json(
-        { error: 'يوجد حساب أو طلب سابق بهذا البريد الإلكتروني' },
+        { error: 'يوجد حساب مسجل بهذا البريد الإلكتروني' },
         { status: 409 }
       );
     }
 
-    const usersCount = await prisma.user.count();
-    const employeeId = `NAUSS-${String(usersCount + 1).padStart(3, '0')}`;
-
-    const user = await prisma.user.create({
+    const newUser = await prisma.user.create({
       data: {
-        employeeId,
+        employeeId: `USR-${Date.now()}`,
         fullName,
         email,
         mobile,
-        department:
-          operationalProject && operationalProject !== 'لا ينطبق'
-            ? operationalProject
-            : 'وكالة التدريب',
-        jobTitle: 'موظف',
+        department: operationalProject || 'لا ينطبق',
+        jobTitle: extension || '',
         passwordHash: password,
         role: 'USER',
-        status: 'PENDING',
+        status: 'ACTIVE',
+        avatar: null,
+        undertaking: {
+          create: {
+            accepted: true,
+            acceptedAt: new Date(),
+          },
+        },
+      },
+      include: {
+        undertaking: true,
       },
     });
 
-    await prisma.undertaking.create({
-      data: {
-        userId: user.id,
-        accepted: true,
-        acceptedAt: new Date(),
-        version: '1.0',
+    return NextResponse.json(
+      {
+        message: 'تم إنشاء الحساب بنجاح ويمكن استخدامه مباشرة',
+        data: mapUser(newUser),
       },
-    });
-
-    return NextResponse.json({ ok: true });
+      { status: 201 }
+    );
   } catch {
-    return NextResponse.json({ error: 'تعذر إرسال الطلب' }, { status: 500 });
+    return NextResponse.json({ error: 'تعذر إنشاء الحساب' }, { status: 500 });
   }
 }

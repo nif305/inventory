@@ -43,10 +43,81 @@ function toPrismaRole(role?: string) {
 
 function toPrismaStatus(status?: string) {
   if (status === 'active') return 'ACTIVE';
-  if (status === 'pending') return 'PENDING';
   if (status === 'disabled') return 'DISABLED';
+  if (status === 'pending') return 'PENDING';
   if (status === 'rejected') return 'REJECTED';
-  return 'DISABLED';
+  return 'ACTIVE';
+}
+
+async function updateUserHandler(
+  request: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await context.params;
+    const body = await request.json();
+
+    const fullName = normalizeText(body?.fullName);
+    const email = normalizeEmail(body?.email);
+    const mobile = normalizeText(body?.mobile);
+    const department = normalizeText(body?.department);
+    const jobTitle = normalizeText(body?.jobTitle);
+    const operationalProject = normalizeText(body?.operationalProject);
+    const password = normalizeText(body?.password);
+    const role = normalizeText(body?.role);
+    const status = normalizeText(body?.status);
+
+    const currentUser = await prisma.user.findUnique({
+      where: { id },
+      include: {
+        undertaking: true,
+      },
+    });
+
+    if (!currentUser) {
+      return NextResponse.json({ error: 'المستخدم غير موجود' }, { status: 404 });
+    }
+
+    if (email) {
+      const duplicated = await prisma.user.findFirst({
+        where: {
+          email,
+          NOT: { id },
+        },
+      });
+
+      if (duplicated) {
+        return NextResponse.json(
+          { error: 'البريد الإلكتروني مستخدم من حساب آخر' },
+          { status: 409 }
+        );
+      }
+    }
+
+    const updatedUser = await prisma.user.update({
+      where: { id },
+      data: {
+        fullName: fullName || currentUser.fullName,
+        email: email || currentUser.email,
+        mobile: mobile || currentUser.mobile,
+        department:
+          operationalProject ||
+          department ||
+          currentUser.department,
+        jobTitle: jobTitle || currentUser.jobTitle,
+        passwordHash: password || currentUser.passwordHash,
+        role: role ? toPrismaRole(role) : currentUser.role,
+        status: status ? toPrismaStatus(status) : currentUser.status,
+      },
+      include: {
+        undertaking: true,
+      },
+    });
+
+    return NextResponse.json({ data: mapUser(updatedUser) });
+  } catch {
+    return NextResponse.json({ error: 'تعذر تحديث المستخدم' }, { status: 500 });
+  }
 }
 
 export async function GET(
@@ -77,60 +148,12 @@ export async function PUT(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
-  try {
-    const { id } = await context.params;
-    const body = await request.json();
+  return updateUserHandler(request, context);
+}
 
-    const fullName = normalizeText(body?.fullName);
-    const email = normalizeEmail(body?.email);
-    const mobile = normalizeText(body?.mobile);
-    const department = normalizeText(body?.department);
-    const jobTitle = normalizeText(body?.jobTitle);
-    const role = body?.role;
-    const status = body?.status;
-
-    const currentUser = await prisma.user.findUnique({
-      where: { id },
-    });
-
-    if (!currentUser) {
-      return NextResponse.json({ error: 'المستخدم غير موجود' }, { status: 404 });
-    }
-
-    if (email) {
-      const duplicated = await prisma.user.findFirst({
-        where: {
-          email,
-          NOT: { id },
-        },
-      });
-
-      if (duplicated) {
-        return NextResponse.json(
-          { error: 'البريد الإلكتروني مستخدم من حساب آخر' },
-          { status: 409 }
-        );
-      }
-    }
-
-    const updatedUser = await prisma.user.update({
-      where: { id },
-      data: {
-        fullName: fullName || currentUser.fullName,
-        email: email || currentUser.email,
-        mobile: mobile || currentUser.mobile,
-        department: department || currentUser.department,
-        jobTitle: jobTitle || currentUser.jobTitle,
-        role: role ? toPrismaRole(role) : currentUser.role,
-        status: status ? toPrismaStatus(status) : currentUser.status,
-      },
-      include: {
-        undertaking: true,
-      },
-    });
-
-    return NextResponse.json({ data: mapUser(updatedUser) });
-  } catch {
-    return NextResponse.json({ error: 'تعذر تحديث المستخدم' }, { status: 500 });
-  }
-} 
+export async function PATCH(
+  request: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  return updateUserHandler(request, context);
+}

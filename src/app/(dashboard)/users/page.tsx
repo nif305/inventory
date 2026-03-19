@@ -11,34 +11,41 @@ import { useAuth } from '@/context/AuthContext';
 
 type UserRow = {
   id: string;
+  employeeId?: string;
   fullName: string;
   email: string;
-  phone?: string | null;
+  mobile?: string | null;
   extension?: string | null;
-  role: 'manager' | 'warehouse' | 'user';
-  status: 'active' | 'pending' | 'disabled';
+  department?: string | null;
+  jobTitle?: string | null;
   operationalProject?: string | null;
-  createdAt?: string;
+  role: 'manager' | 'warehouse' | 'user';
+  status: 'active' | 'disabled';
+  createdAt?: string | null;
 };
 
 type FormState = {
   fullName: string;
   email: string;
-  phone: string;
+  mobile: string;
   extension: string;
-  role: 'manager' | 'warehouse' | 'user';
-  status: 'active' | 'pending' | 'disabled';
   operationalProject: string;
+  role: 'manager' | 'warehouse' | 'user';
+  status: 'active' | 'disabled';
+  password: string;
+  confirmPassword: string;
 };
 
 const emptyForm: FormState = {
   fullName: '',
   email: '',
-  phone: '',
+  mobile: '',
   extension: '',
+  operationalProject: '',
   role: 'user',
   status: 'active',
-  operationalProject: '',
+  password: '',
+  confirmPassword: '',
 };
 
 function formatDate(value?: string | null) {
@@ -75,63 +82,51 @@ function roleLabel(role: UserRow['role']) {
 
 function statusLabel(status: UserRow['status']) {
   if (status === 'active') return 'نشط';
-  if (status === 'pending') return 'قيد المراجعة';
-  return 'معطل';
+  return 'موقوف';
 }
 
-function statusVariant(status: UserRow['status']): 'success' | 'warning' | 'danger' | 'neutral' {
-  if (status === 'active') return 'success';
-  if (status === 'pending') return 'warning';
-  if (status === 'disabled') return 'danger';
-  return 'neutral';
+function statusVariant(status: UserRow['status']): 'success' | 'danger' {
+  return status === 'active' ? 'success' : 'danger';
 }
 
 export default function UsersPage() {
-  const { user } = useAuth();
+  const { user, refreshUsers } = useAuth();
   const isManager = user?.role === 'manager';
 
   const [rows, setRows] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<'ALL' | 'manager' | 'warehouse' | 'user'>('ALL');
-  const [statusFilter, setStatusFilter] = useState<'ALL' | 'active' | 'pending' | 'disabled'>('ALL');
+  const [statusFilter, setStatusFilter] = useState<'ALL' | 'active' | 'disabled'>('ALL');
 
   const [selected, setSelected] = useState<UserRow | null>(null);
   const [editing, setEditing] = useState<UserRow | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    let mounted = true;
-
-    async function fetchUsers() {
-      setLoading(true);
-      try {
-        const res = await fetch('/api/users', { cache: 'no-store' });
-        const data = await res.json();
-
-        if (mounted) {
-          setRows(Array.isArray(data?.data) ? data.data : []);
-        }
-      } catch {
-        if (mounted) setRows([]);
-      } finally {
-        if (mounted) setLoading(false);
-      }
+  const fetchUsers = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/users', { cache: 'no-store' });
+      const data = await res.json().catch(() => null);
+      setRows(Array.isArray(data?.data) ? data.data : []);
+    } catch {
+      setRows([]);
+    } finally {
+      setLoading(false);
     }
+  };
 
+  useEffect(() => {
     fetchUsers();
-    return () => {
-      mounted = false;
-    };
   }, []);
 
   const stats = useMemo(() => {
     return {
       total: rows.length,
       active: rows.filter((row) => row.status === 'active').length,
-      pending: rows.filter((row) => row.status === 'pending').length,
       disabled: rows.filter((row) => row.status === 'disabled').length,
+      managers: rows.filter((row) => row.role === 'manager').length,
     };
   }, [rows]);
 
@@ -146,7 +141,7 @@ export default function UsersPage() {
         [
           row.fullName,
           row.email,
-          row.phone,
+          row.mobile,
           row.extension,
           row.operationalProject,
           roleLabel(row.role),
@@ -166,11 +161,13 @@ export default function UsersPage() {
     setForm({
       fullName: row.fullName || '',
       email: row.email || '',
-      phone: row.phone || '',
+      mobile: row.mobile || '',
       extension: row.extension || '',
+      operationalProject: row.operationalProject || row.department || '',
       role: row.role,
       status: row.status,
-      operationalProject: row.operationalProject || '',
+      password: '',
+      confirmPassword: '',
     });
   };
 
@@ -181,13 +178,38 @@ export default function UsersPage() {
 
   const handleSave = async () => {
     if (!editing) return;
+
+    if (!form.fullName.trim() || !form.email.trim()) {
+      alert('الاسم والبريد الإلكتروني مطلوبان');
+      return;
+    }
+
+    if (form.password && form.password !== form.confirmPassword) {
+      alert('كلمة المرور وتأكيدها غير متطابقين');
+      return;
+    }
+
     setSaving(true);
 
     try {
+      const payload: Record<string, string> = {
+        fullName: form.fullName.trim(),
+        email: form.email.trim(),
+        mobile: form.mobile.trim(),
+        extension: form.extension.trim(),
+        operationalProject: form.operationalProject.trim(),
+        role: form.role,
+        status: form.status,
+      };
+
+      if (form.password.trim()) {
+        payload.password = form.password.trim();
+      }
+
       const res = await fetch(`/api/users/${editing.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify(payload),
       });
 
       const data = await res.json().catch(() => null);
@@ -197,20 +219,41 @@ export default function UsersPage() {
         return;
       }
 
-      setRows((prev) =>
-        prev.map((item) =>
-          item.id === editing.id
-            ? {
-                ...item,
-                ...form,
-              }
-            : item
-        )
-      );
-
+      await fetchUsers();
+      await refreshUsers();
       closeEdit();
     } finally {
       setSaving(false);
+    }
+  };
+
+  const quickToggleStatus = async (row: UserRow) => {
+    const nextStatus = row.status === 'active' ? 'disabled' : 'active';
+
+    try {
+      const res = await fetch(`/api/users/${row.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: nextStatus,
+        }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        alert(data?.error || 'تعذر تحديث حالة الحساب');
+        return;
+      }
+
+      await fetchUsers();
+      await refreshUsers();
+
+      if (selected?.id === row.id) {
+        setSelected((prev) => (prev ? { ...prev, status: nextStatus } : prev));
+      }
+    } catch {
+      alert('تعذر تحديث حالة الحساب');
     }
   };
 
@@ -230,7 +273,7 @@ export default function UsersPage() {
             المستخدمون
           </h1>
           <p className="text-[13px] leading-7 text-[#61706f] sm:text-sm">
-            إدارة المستخدمين، مراجعة حالاتهم، وتحديث أدوارهم ومعلوماتهم التشغيلية.
+            الحسابات تعمل مباشرة بعد التسجيل. دور المدير هنا هو إدارة الدور وإيقاف الحساب أو تنشيطه عند الحاجة.
           </p>
         </div>
 
@@ -250,16 +293,16 @@ export default function UsersPage() {
           </Card>
 
           <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none sm:rounded-2xl">
-            <div className="text-[12px] text-[#6f7b7a]">قيد المراجعة</div>
-            <div className="mt-1 text-[22px] font-extrabold leading-none text-[#d0b284] sm:text-xl">
-              {stats.pending}
+            <div className="text-[12px] text-[#6f7b7a]">الموقوفون</div>
+            <div className="mt-1 text-[22px] font-extrabold leading-none text-[#7c1e3e] sm:text-xl">
+              {stats.disabled}
             </div>
           </Card>
 
           <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none sm:rounded-2xl">
-            <div className="text-[12px] text-[#6f7b7a]">المعطلون</div>
-            <div className="mt-1 text-[22px] font-extrabold leading-none text-[#7c1e3e] sm:text-xl">
-              {stats.disabled}
+            <div className="text-[12px] text-[#6f7b7a]">المديرون</div>
+            <div className="mt-1 text-[22px] font-extrabold leading-none text-[#d0b284] sm:text-xl">
+              {stats.managers}
             </div>
           </Card>
         </div>
@@ -295,14 +338,13 @@ export default function UsersPage() {
             <select
               value={statusFilter}
               onChange={(e) =>
-                setStatusFilter(e.target.value as 'ALL' | 'active' | 'pending' | 'disabled')
+                setStatusFilter(e.target.value as 'ALL' | 'active' | 'disabled')
               }
               className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#016564] focus:ring-4 focus:ring-[#016564]/10"
             >
               <option value="ALL">الكل</option>
               <option value="active">نشط</option>
-              <option value="pending">قيد المراجعة</option>
-              <option value="disabled">معطل</option>
+              <option value="disabled">موقوف</option>
             </select>
           </div>
         </div>
@@ -337,19 +379,28 @@ export default function UsersPage() {
 
                   <div className="grid gap-2 text-[12px] text-[#61706f] sm:grid-cols-2 sm:text-xs">
                     <div className="break-all">البريد: {row.email}</div>
-                    <div>الجوال: {row.phone || '—'}</div>
+                    <div>الجوال: {row.mobile || '—'}</div>
                     <div>التحويلة: {row.extension || '—'}</div>
-                    <div className="break-words">المشروع: {row.operationalProject || '—'}</div>
+                    <div className="break-words">المشروع: {row.operationalProject || row.department || '—'}</div>
                     <div className="sm:col-span-2">تاريخ الإنشاء: {formatDate(row.createdAt)}</div>
                   </div>
                 </div>
 
-                <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap">
                   <Button variant="ghost" className="w-full sm:w-auto" onClick={() => setSelected(row)}>
                     عرض
                   </Button>
+
                   <Button className="w-full sm:w-auto" onClick={() => openEdit(row)}>
                     تعديل
+                  </Button>
+
+                  <Button
+                    variant={row.status === 'active' ? 'danger' : 'secondary'}
+                    className="w-full sm:w-auto"
+                    onClick={() => quickToggleStatus(row)}
+                  >
+                    {row.status === 'active' ? 'إيقاف الحساب' : 'تنشيط الحساب'}
                   </Button>
                 </div>
               </div>
@@ -392,7 +443,7 @@ export default function UsersPage() {
 
               <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl">
                 <div className="text-xs font-bold text-[#016564]">الجوال</div>
-                <div className="mt-1 text-sm leading-7 text-[#304342]">{selected.phone || '—'}</div>
+                <div className="mt-1 text-sm leading-7 text-[#304342]">{selected.mobile || '—'}</div>
               </div>
 
               <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl">
@@ -403,14 +454,25 @@ export default function UsersPage() {
               <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:col-span-2 sm:rounded-2xl">
                 <div className="text-xs font-bold text-[#016564]">المشروع التشغيلي</div>
                 <div className="mt-1 break-words text-sm leading-7 text-[#304342]">
-                  {selected.operationalProject || '—'}
+                  {selected.operationalProject || selected.department || '—'}
                 </div>
               </div>
             </div>
 
-            <div className="flex justify-end">
+            <div className="flex flex-col-reverse justify-end gap-2 sm:flex-row">
               <Button variant="ghost" onClick={() => setSelected(null)} className="w-full sm:w-auto">
                 إغلاق
+              </Button>
+
+              <Button
+                variant={selected.status === 'active' ? 'danger' : 'secondary'}
+                onClick={async () => {
+                  await quickToggleStatus(selected);
+                  setSelected(null);
+                }}
+                className="w-full sm:w-auto"
+              >
+                {selected.status === 'active' ? 'إيقاف الحساب' : 'تنشيط الحساب'}
               </Button>
             </div>
           </div>
@@ -439,8 +501,8 @@ export default function UsersPage() {
 
               <Input
                 label="الجوال"
-                value={form.phone}
-                onChange={(e) => setForm((prev) => ({ ...prev, phone: e.target.value }))}
+                value={form.mobile}
+                onChange={(e) => setForm((prev) => ({ ...prev, mobile: e.target.value }))}
               />
 
               <Input
@@ -474,14 +536,13 @@ export default function UsersPage() {
                   onChange={(e) =>
                     setForm((prev) => ({
                       ...prev,
-                      status: e.target.value as 'active' | 'pending' | 'disabled',
+                      status: e.target.value as 'active' | 'disabled',
                     }))
                   }
                   className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#016564] focus:ring-4 focus:ring-[#016564]/10"
                 >
                   <option value="active">نشط</option>
-                  <option value="pending">قيد المراجعة</option>
-                  <option value="disabled">معطل</option>
+                  <option value="disabled">موقوف</option>
                 </select>
               </div>
 
@@ -494,12 +555,35 @@ export default function UsersPage() {
                   }
                 />
               </div>
+
+              <div>
+                <Input
+                  label="كلمة مرور جديدة"
+                  type="password"
+                  value={form.password}
+                  onChange={(e) => setForm((prev) => ({ ...prev, password: e.target.value }))}
+                  placeholder="اتركه فارغًا إذا لا تريد تغييرها"
+                />
+              </div>
+
+              <div>
+                <Input
+                  label="تأكيد كلمة المرور الجديدة"
+                  type="password"
+                  value={form.confirmPassword}
+                  onChange={(e) =>
+                    setForm((prev) => ({ ...prev, confirmPassword: e.target.value }))
+                  }
+                  placeholder="أعد كتابة كلمة المرور"
+                />
+              </div>
             </div>
 
             <div className="flex flex-col-reverse gap-2 border-t pt-4 sm:flex-row sm:justify-end">
               <Button variant="ghost" onClick={closeEdit} className="w-full sm:w-auto">
                 إلغاء
               </Button>
+
               <Button onClick={handleSave} disabled={saving} className="w-full sm:w-auto">
                 {saving ? 'جارٍ الحفظ...' : 'حفظ التعديل'}
               </Button>
