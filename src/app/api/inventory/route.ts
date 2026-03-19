@@ -120,14 +120,17 @@ export async function POST(request: NextRequest) {
       let updated = 0;
 
       for (const item of approvedInventorySeed) {
-        const exists = await prisma.inventoryItem.findUnique({
-          where: { code: item.code },
+        const exists = await prisma.inventoryItem.findFirst({
+          where: {
+            name: item.name,
+            category: item.category,
+            type: item.type,
+          },
           select: { id: true },
         });
 
         if (exists) {
           await InventoryService.update(exists.id, {
-            code: item.code,
             name: item.name,
             category: item.category,
             subcategory: item.subcategory,
@@ -145,7 +148,6 @@ export async function POST(request: NextRequest) {
           updated += 1;
         } else {
           await InventoryService.create({
-            code: item.code,
             name: item.name,
             category: item.category,
             subcategory: item.subcategory,
@@ -180,4 +182,4 @@ export async function POST(request: NextRequest) {
       { status: 400 },
     );
   }
-} 
+}
