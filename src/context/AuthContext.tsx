@@ -241,17 +241,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const logout = useCallback(() => {
-    setUser(null);
-    setOriginalUser(null);
-    setAllUsers([]);
-    saveAuthUser(null);
-    saveOriginalAuthUser(null);
-
     fetch('/api/auth/logout', {
       method: 'POST',
       credentials: 'include',
+      cache: 'no-store',
     }).finally(() => {
-      window.location.href = '/login';
+      saveAuthUser(null);
+      saveOriginalAuthUser(null);
+      setAllUsers([]);
+      window.location.replace('/login');
     });
   }, []);
 
