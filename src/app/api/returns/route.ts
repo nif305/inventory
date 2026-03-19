@@ -14,7 +14,9 @@ function mapRole(role: string): Role {
 async function resolveSessionUser(request: NextRequest) {
   const cookieId = decodeURIComponent(request.cookies.get('user_id')?.value || '').trim();
   const cookieEmail = decodeURIComponent(request.cookies.get('user_email')?.value || '').trim();
-  const cookieName = decodeURIComponent(request.cookies.get('user_name')?.value || 'مستخدم النظام').trim();
+  const cookieName = decodeURIComponent(
+    request.cookies.get('user_name')?.value || 'مستخدم النظام'
+  ).trim();
   const cookieDepartment = decodeURIComponent(
     request.cookies.get('user_department')?.value || 'إدارة عمليات التدريب'
   ).trim();
@@ -30,7 +32,14 @@ async function resolveSessionUser(request: NextRequest) {
   if (cookieId) {
     user = await prisma.user.findUnique({
       where: { id: cookieId },
-      select: { id: true, role: true, department: true, email: true, employeeId: true },
+      select: {
+        id: true,
+        role: true,
+        department: true,
+        email: true,
+        employeeId: true,
+        status: true,
+      },
     });
   }
 
@@ -42,48 +51,42 @@ async function resolveSessionUser(request: NextRequest) {
           mode: 'insensitive',
         },
       },
-      select: { id: true, role: true, department: true, email: true, employeeId: true },
+      select: {
+        id: true,
+        role: true,
+        department: true,
+        email: true,
+        employeeId: true,
+        status: true,
+      },
     });
   }
 
   if (!user && cookieEmployeeId) {
     user = await prisma.user.findUnique({
       where: { employeeId: cookieEmployeeId },
-      select: { id: true, role: true, department: true, email: true, employeeId: true },
+      select: {
+        id: true,
+        role: true,
+        department: true,
+        email: true,
+        employeeId: true,
+        status: true,
+      },
     });
   }
 
   if (!user) {
-    const safeEmployeeId = cookieEmployeeId || `EMP-${Date.now()}`;
-    const safeEmail = cookieEmail || `${safeEmployeeId.toLowerCase()}@agency.local`;
+    throw new Error('غير مصرح');
+  }
 
-    user = await prisma.user.upsert({
-      where: { employeeId: safeEmployeeId },
-      update: {
-        fullName: cookieName,
-        email: safeEmail,
-        department: cookieDepartment,
-        role,
-        status: Status.ACTIVE,
-      },
-      create: {
-        employeeId: safeEmployeeId,
-        fullName: cookieName,
-        email: safeEmail,
-        mobile: '0500000000',
-        department: cookieDepartment,
-        jobTitle: 'مستخدم',
-        passwordHash: 'local-auth',
-        role,
-        status: Status.ACTIVE,
-      },
-      select: { id: true, role: true, department: true, email: true, employeeId: true },
-    });
+  if (user.status !== Status.ACTIVE) {
+    throw new Error('الحساب غير نشط');
   }
 
   return {
     id: user.id,
-    role: user.role,
+    role: user.role || role,
     department: user.department || cookieDepartment,
   };
 }
@@ -104,9 +107,12 @@ export async function GET(request: NextRequest) {
       })
     );
   } catch (error: any) {
+    const statusCode =
+      error.message === 'غير مصرح' || error.message === 'الحساب غير نشط' ? 401 : 500;
+
     return NextResponse.json(
       { error: error.message || 'تعذر جلب طلبات الإرجاع' },
-      { status: 500 }
+      { status: statusCode }
     );
   }
 }
@@ -133,9 +139,12 @@ export async function POST(request: NextRequest) {
       { status: 201 }
     );
   } catch (error: any) {
+    const statusCode =
+      error.message === 'غير مصرح' || error.message === 'الحساب غير نشط' ? 401 : 400;
+
     return NextResponse.json(
       { error: error.message || 'تعذر إنشاء طلب الإرجاع' },
-      { status: 400 }
+      { status: statusCode }
     );
   }
 }
@@ -177,9 +186,12 @@ export async function PUT(request: NextRequest) {
 
     return NextResponse.json({ error: 'إجراء غير صالح' }, { status: 400 });
   } catch (error: any) {
+    const statusCode =
+      error.message === 'غير مصرح' || error.message === 'الحساب غير نشط' ? 401 : 400;
+
     return NextResponse.json(
       { error: error.message || 'تعذر تنفيذ الإجراء' },
-      { status: 400 }
+      { status: statusCode }
     );
   }
 }
