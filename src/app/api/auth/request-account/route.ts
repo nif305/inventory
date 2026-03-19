@@ -16,7 +16,7 @@ function mapUser(user: any) {
     fullName: user.fullName,
     email: user.email,
     mobile: user.mobile,
-    extension: '',
+    extension: user.jobTitle || '',
     department: user.department,
     jobTitle: user.jobTitle,
     operationalProject: user.department,
@@ -62,9 +62,7 @@ export async function POST(request: NextRequest) {
     }
 
     const existingUser = await prisma.user.findFirst({
-      where: {
-        email,
-      },
+      where: { email },
     });
 
     if (existingUser) {
