@@ -5,6 +5,12 @@ const prisma = new PrismaClient();
 const SUPPORT_SERVICES_TO = ['ssd@nauss.edu.sa', 'AAlosaimi@nauss.edu.sa'];
 const FINANCE_TO = ['finance@nauss.edu.sa', 'aalaraj@nauss.edu.sa', 'YAlqaoud@nauss.edu.sa', 'Procurement@nauss.edu.sa'];
 
+type EmailAttachment = {
+  filename: string;
+  contentType?: string | null;
+  base64Content: string;
+};
+
 function formatDateTime(value: Date) {
   const date = new Intl.DateTimeFormat('en-CA', {
     year: 'numeric',
@@ -30,6 +36,10 @@ function escapeHtml(value?: string | null) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function sanitizeHeader(value?: string | null) {
+  return String(value || '').replace(/\r/g, ' ').replace(/\n/g, ' ').trim();
 }
 
 function normalizeEmailList(value: string | string[] | null | undefined) {
@@ -71,22 +81,70 @@ function buildDetailsTable(rows: Array<[string, string]>) {
   `.trim();
 }
 
-function buildEmlContent(params: {
+function buildMultipartEml(params: {
   to: string[];
   cc?: string[];
   subject: string;
   html: string;
+  attachments?: EmailAttachment[];
 }) {
+  const safeSubject = sanitizeHeader(params.subject);
+  const safeTo = params.to.map(sanitizeHeader).filter(Boolean);
+  const safeCc = (params.cc || []).map(sanitizeHeader).filter(Boolean);
+  const attachments = (params.attachments || []).filter(
+    (item) => item.filename && item.base64Content
+  );
+
+  if (!attachments.length) {
+    const headers = [
+      `To: ${safeTo.join(', ')}`,
+      safeCc.length ? `Cc: ${safeCc.join(', ')}` : '',
+      `Subject: ${safeSubject}`,
+      'MIME-Version: 1.0',
+      'Content-Type: text/html; charset=UTF-8',
+      'Content-Transfer-Encoding: 8bit',
+      '',
+      params.html,
+    ].filter(Boolean);
+
+    return headers.join('\r\n');
+  }
+
+  const boundary = `----=_NextPart_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+
   const headers = [
-    `To: ${params.to.join(', ')}`,
-    params.cc && params.cc.length ? `Cc: ${params.cc.join(', ')}` : '',
-    `Subject: ${params.subject}`,
+    `To: ${safeTo.join(', ')}`,
+    safeCc.length ? `Cc: ${safeCc.join(', ')}` : '',
+    `Subject: ${safeSubject}`,
     'MIME-Version: 1.0',
-    'Content-Type: text/html; charset=UTF-8',
+    `Content-Type: multipart/mixed; boundary="${boundary}"`,
     '',
   ].filter(Boolean);
 
-  return `${headers.join('\r\n')}\r\n${params.html}`;
+  const bodyParts = [
+    `--${boundary}`,
+    'Content-Type: text/html; charset=UTF-8',
+    'Content-Transfer-Encoding: 8bit',
+    '',
+    params.html,
+    '',
+  ];
+
+  for (const attachment of attachments) {
+    bodyParts.push(
+      `--${boundary}`,
+      `Content-Type: ${sanitizeHeader(attachment.contentType || 'application/octet-stream')}; name="${sanitizeHeader(attachment.filename)}"`,
+      `Content-Disposition: attachment; filename="${sanitizeHeader(attachment.filename)}"`,
+      'Content-Transfer-Encoding: base64',
+      '',
+      attachment.base64Content.replace(/\s+/g, ''),
+      ''
+    );
+  }
+
+  bodyParts.push(`--${boundary}--`, '');
+
+  return `${headers.join('\r\n')}\r\n${bodyParts.join('\r\n')}`;
 }
 
 export const EmailTemplateService = {
@@ -103,6 +161,7 @@ export const EmailTemplateService = {
     note: string;
     adminNotes?: string | null;
     customRecipients?: string[];
+    attachments?: EmailAttachment[];
   }) {
     const to =
       params.requestType === 'PURCHASE'
@@ -145,7 +204,13 @@ export const EmailTemplateService = {
 </div>
     `.trim();
 
-    const emlContent = buildEmlContent({ to, cc, subject, html });
+    const emlContent = buildMultipartEml({
+      to,
+      cc,
+      subject,
+      html,
+      attachments: params.attachments,
+    });
 
     return prisma.emailDraft.create({
       data: {
