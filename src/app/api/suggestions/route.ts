@@ -361,7 +361,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-export async function PUT(request: NextRequest) {
+async function handleModeration(request: NextRequest) {
   try {
     const body = await request.json();
     const sessionUser = await resolveSessionUser(request);
@@ -636,4 +636,13 @@ export async function PUT(request: NextRequest) {
   } catch (error: any) {
     return NextResponse.json({ error: error.message || 'تعذر معالجة الطلب' }, { status: 400 });
   }
+}
+
+
+export async function PUT(request: NextRequest) {
+  return handleModeration(request);
+}
+
+export async function PATCH(request: NextRequest) {
+  return handleModeration(request);
 }
