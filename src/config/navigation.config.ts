@@ -16,94 +16,91 @@ export type NavigationItem = {
     | 'users'
     | 'archive'
     | 'maintenance'
+    | 'cleaning'
     | 'purchases'
     | 'reports'
     | 'suggestions'
+    | 'other'
     | 'email';
   roles?: AppRole[];
-  group: 'main' | 'operations' | 'governance' | 'management';
+  group: 'main' | 'primary' | 'services' | 'messages' | 'governance';
 };
 
 export const navigationItems: NavigationItem[] = [
   {
     href: '/dashboard',
-    label: 'لوحة المعلومات',
+    label: 'لوحة التحكم',
     icon: 'dashboard',
     roles: ['manager', 'warehouse', 'user'],
     group: 'main',
   },
 
   {
-    href: '/requests',
-    label: 'طلبات المواد',
-    icon: 'requests',
-    roles: ['manager', 'warehouse', 'user'],
-    group: 'operations',
-  },
-  {
-    href: '/returns',
-    label: 'إرجاع المواد',
-    icon: 'returns',
-    roles: ['manager', 'warehouse', 'user'],
-    group: 'operations',
-  },
-  {
-    href: '/custody',
-    label: 'العهد',
-    icon: 'custody',
-    roles: ['manager', 'warehouse'],
-    group: 'operations',
-  },
-  {
     href: '/inventory',
     label: 'المخزون',
     icon: 'inventory',
     roles: ['manager', 'warehouse'],
-    group: 'operations',
+    group: 'primary',
   },
+  {
+    href: '/requests',
+    label: 'الطلبات التشغيلية',
+    icon: 'requests',
+    roles: ['manager', 'warehouse', 'user'],
+    group: 'primary',
+  },
+  {
+    href: '/returns',
+    label: 'الإرجاعات التشغيلية',
+    icon: 'returns',
+    roles: ['manager', 'warehouse', 'user'],
+    group: 'primary',
+  },
+
   {
     href: '/maintenance',
-    label: 'طلبات الصيانة',
+    label: 'الصيانة',
     icon: 'maintenance',
     roles: ['manager', 'warehouse'],
-    group: 'operations',
+    group: 'services',
   },
   {
-    href: '/suggestions?category=CLEANING',
-    label: 'طلبات النظافة',
-    icon: 'suggestions',
+    href: '/cleaning',
+    label: 'النظافة',
+    icon: 'cleaning',
     roles: ['manager', 'warehouse'],
-    group: 'operations',
+    group: 'services',
   },
   {
     href: '/purchases',
-    label: 'طلبات الشراء المباشر',
+    label: 'الشراء المباشر',
     icon: 'purchases',
     roles: ['manager', 'warehouse'],
-    group: 'operations',
+    group: 'services',
   },
   {
     href: '/suggestions?category=OTHER',
     label: 'الطلبات الأخرى',
-    icon: 'email',
+    icon: 'other',
     roles: ['manager', 'warehouse'],
-    group: 'operations',
+    group: 'services',
   },
 
   {
-    href: '/notifications',
-    label: 'الإشعارات',
-    icon: 'notifications',
+    href: '/messages',
+    label: 'المراسلات الداخلية',
+    icon: 'messages',
     roles: ['manager', 'warehouse', 'user'],
-    group: 'governance',
+    group: 'messages',
   },
   {
-    href: '/audit-logs',
-    label: 'سجل التدقيق',
-    icon: 'audit',
+    href: '/email-drafts',
+    label: 'المراسلات الخارجية',
+    icon: 'email',
     roles: ['manager'],
-    group: 'governance',
+    group: 'messages',
   },
+
   {
     href: '/reports',
     label: 'التقارير',
@@ -118,33 +115,33 @@ export const navigationItems: NavigationItem[] = [
     roles: ['manager'],
     group: 'governance',
   },
-
   {
-    href: '/messages',
-    label: 'المراسلات',
-    icon: 'messages',
-    roles: ['manager', 'warehouse', 'user'],
-    group: 'management',
-  },
-  {
-    href: '/email-drafts',
-    label: 'المراسلات الخارجية',
-    icon: 'email',
+    href: '/audit-logs',
+    label: 'سجل التدقيق',
+    icon: 'audit',
     roles: ['manager'],
-    group: 'management',
+    group: 'governance',
   },
   {
     href: '/users',
     label: 'المستخدمون',
     icon: 'users',
     roles: ['manager'],
-    group: 'management',
+    group: 'governance',
   },
   {
-    href: '/suggestions',
-    label: 'الطلبات التشغيلية',
-    icon: 'suggestions',
-    roles: ['user'],
-    group: 'management',
+    href: '/notifications',
+    label: 'الإشعارات',
+    icon: 'notifications',
+    roles: ['manager', 'warehouse', 'user'],
+    group: 'governance',
+  },
+
+  {
+    href: '/custody',
+    label: 'العهد',
+    icon: 'custody',
+    roles: ['manager', 'warehouse'],
+    group: 'governance',
   },
 ];
