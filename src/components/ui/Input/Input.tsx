@@ -36,10 +36,11 @@ export const Input = React.forwardRef<HTMLInputElement, InputProps>(
           aria-invalid={error ? 'true' : 'false'}
           aria-describedby={describedBy || undefined}
           className={cn(
-            'block w-full min-w-0 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition',
+            'block h-12 w-full min-w-0 rounded-2xl border border-slate-200 bg-white px-4 text-sm text-slate-800 outline-none transition',
             'placeholder:text-slate-400 focus:border-[#016564] focus:ring-4 focus:ring-[#016564]/10',
             'disabled:cursor-not-allowed disabled:bg-slate-50 disabled:text-slate-400',
             '[appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
+            'truncate sm:text-sm',
             className
           )}
           {...props}

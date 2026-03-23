@@ -9,7 +9,7 @@ export function PageShell({
   children: React.ReactNode;
 }) {
   return (
-    <div className={cn('min-w-0 space-y-4 sm:space-y-6', className)}>
+    <div className={cn('w-full min-w-0 overflow-x-hidden space-y-4 sm:space-y-6', className)}>
       {children}
     </div>
   );
