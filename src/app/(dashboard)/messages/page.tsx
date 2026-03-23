@@ -108,8 +108,8 @@ function pushMessageNotification(
 ) {
   createNotification({
     userId,
-    kind: 'notification',
-    severity: 'info',
+    kind: 'alert',
+    severity: 'critical',
     title,
     message,
     link: `/messages?open=${threadId}`,

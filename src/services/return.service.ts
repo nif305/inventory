@@ -153,6 +153,27 @@ export const ReturnService = {
         },
       });
 
+      const targets = await prisma.user.findMany({
+        where: {
+          role: { in: [Role.MANAGER, Role.WAREHOUSE] },
+        },
+        select: { id: true },
+      });
+
+      if (targets.length) {
+        await prisma.notification.createMany({
+          data: targets.map((user) => ({
+            userId: user.id,
+            type: 'NEW_RETURN_REQUEST',
+            title: 'طلب إرجاع جديد بانتظار الاستلام',
+            message: `تم رفع طلب إرجاع جديد برقم ${result.code} ويحتاج الاستلام والتوثيق.`,
+            link: `/returns?open=${result.id}`,
+            entityId: result.id,
+            entityType: 'RETURN',
+          })),
+        });
+      }
+
       return result;
     }
 
@@ -260,6 +281,27 @@ export const ReturnService = {
           }),
         },
       });
+
+      const targets = await prisma.user.findMany({
+        where: {
+          role: { in: [Role.MANAGER, Role.WAREHOUSE] },
+        },
+        select: { id: true },
+      });
+
+      if (targets.length) {
+        await prisma.notification.createMany({
+          data: targets.map((user) => ({
+            userId: user.id,
+            type: 'NEW_RETURN_REQUEST',
+            title: 'طلب إرجاع جديد بانتظار الاستلام',
+            message: `تم رفع طلب إرجاع جديد برقم ${created.code} ويحتاج الاستلام والتوثيق.`,
+            link: `/returns?open=${created.id}`,
+            entityId: created.id,
+            entityType: 'RETURN',
+          })),
+        });
+      }
 
       return created;
     }
@@ -421,6 +463,21 @@ export const ReturnService = {
         },
       });
 
+      await prisma.notification.create({
+        data: {
+          userId: ret.requesterId,
+          type: 'RETURN_APPROVED',
+          title: normalizedReceivedType === ReturnItemCondition.GOOD ? 'تم استلام المرتجع' : 'تم استلام المرتجع مع ملاحظة',
+          message:
+            normalizedReceivedType === ReturnItemCondition.GOOD
+              ? `تم استلام طلب الإرجاع ${ret.code} وتوثيقه كمادة سليمة.`
+              : `تم استلام طلب الإرجاع ${ret.code} وتوثيق المادة مع ملاحظة على الحالة.`,
+          link: `/returns?open=${ret.id}`,
+          entityId: ret.id,
+          entityType: 'RETURN',
+        },
+      });
+
       return result;
     }
 
@@ -490,6 +547,21 @@ export const ReturnService = {
         },
       });
 
+      await prisma.notification.create({
+        data: {
+          userId: ret.requesterId,
+          type: 'RETURN_APPROVED',
+          title: normalizedReceivedType === ReturnItemCondition.GOOD ? 'تم استلام المرتجع' : 'تم استلام المرتجع مع ملاحظة',
+          message:
+            normalizedReceivedType === ReturnItemCondition.GOOD
+              ? `تم استلام طلب الإرجاع ${ret.code} وتوثيقه كمادة سليمة.`
+              : `تم استلام طلب الإرجاع ${ret.code} وتوثيق المادة مع ملاحظة على الحالة.`,
+          link: `/returns?open=${ret.id}`,
+          entityId: ret.id,
+          entityType: 'RETURN',
+        },
+      });
+
       return result;
     }
 
@@ -552,6 +624,18 @@ export const ReturnService = {
           reason: reason || 'تم رفض طلب الإرجاع',
           sourceType: ret.sourceType,
         }),
+      },
+    });
+
+    await prisma.notification.create({
+      data: {
+        userId: ret.requesterId,
+        type: 'RETURN_REJECTED',
+        title: 'تم رفض طلب الإرجاع',
+        message: `تم رفض طلب الإرجاع ${ret.code}${reason ? ` بسبب: ${reason}` : ''}`,
+        link: `/returns?open=${ret.id}`,
+        entityId: ret.id,
+        entityType: 'RETURN',
       },
     });
 
