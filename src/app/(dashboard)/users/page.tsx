@@ -9,8 +9,6 @@ import { Badge } from '@/components/ui/Badge';
 import { Skeleton } from '@/components/ui/Skeleton';
 import { useAuth } from '@/context/AuthContext';
 
-type Role = 'manager' | 'warehouse' | 'user';
-
 type UserRow = {
   id: string;
   employeeId?: string;
@@ -21,8 +19,7 @@ type UserRow = {
   department?: string | null;
   jobTitle?: string | null;
   operationalProject?: string | null;
-  role: Role;
-  roles: Role[];
+  role: 'manager' | 'warehouse' | 'user';
   status: 'active' | 'disabled';
   createdAt?: string | null;
 };
@@ -33,8 +30,7 @@ type FormState = {
   mobile: string;
   extension: string;
   operationalProject: string;
-  baseRole: 'warehouse' | 'user';
-  managerAccess: boolean;
+  role: 'manager' | 'warehouse' | 'user';
   status: 'active' | 'disabled';
   password: string;
   confirmPassword: string;
@@ -46,8 +42,7 @@ const emptyForm: FormState = {
   mobile: '',
   extension: '',
   operationalProject: '',
-  baseRole: 'user',
-  managerAccess: false,
+  role: 'user',
   status: 'active',
   password: '',
   confirmPassword: '',
@@ -79,27 +74,10 @@ function normalizeArabic(value: string) {
     .replace(/\s+/g, ' ');
 }
 
-function normalizeRoles(roles?: string[] | null, role?: string | null): Role[] {
-  const raw = Array.isArray(roles) ? roles : [];
-  const normalized = raw.filter((item): item is Role => item === 'manager' || item === 'warehouse' || item === 'user');
-
-  if (normalized.length > 0) {
-    return Array.from(new Set(normalized.includes('user') ? normalized : ['user', ...normalized]));
-  }
-
-  if (role === 'manager') return ['user', 'manager'];
-  if (role === 'warehouse') return ['user', 'warehouse'];
-  return ['user'];
-}
-
-function roleLabel(role: Role) {
+function roleLabel(role: UserRow['role']) {
   if (role === 'manager') return 'مدير';
   if (role === 'warehouse') return 'مسؤول مخزن';
   return 'موظف';
-}
-
-function rolesLabelList(roles: Role[]) {
-  return normalizeRoles(roles).map((role) => roleLabel(role));
 }
 
 function statusLabel(status: UserRow['status']) {
@@ -112,13 +90,13 @@ function statusVariant(status: UserRow['status']): 'success' | 'danger' {
 }
 
 export default function UsersPage() {
-  const { user, refreshUsers } = useAuth();
+  const { user, loading: authLoading, refreshUsers } = useAuth();
   const isManager = user?.role === 'manager';
 
   const [rows, setRows] = useState<UserRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [roleFilter, setRoleFilter] = useState<'ALL' | Role>('ALL');
+  const [roleFilter, setRoleFilter] = useState<'ALL' | 'manager' | 'warehouse' | 'user'>('ALL');
   const [statusFilter, setStatusFilter] = useState<'ALL' | 'active' | 'disabled'>('ALL');
 
   const [selected, setSelected] = useState<UserRow | null>(null);
@@ -131,13 +109,7 @@ export default function UsersPage() {
     try {
       const res = await fetch('/api/users', { cache: 'no-store' });
       const data = await res.json().catch(() => null);
-      const mapped = Array.isArray(data?.data)
-        ? data.data.map((row: UserRow) => ({
-            ...row,
-            roles: normalizeRoles(row.roles, row.role),
-          }))
-        : [];
-      setRows(mapped);
+      setRows(Array.isArray(data?.data) ? data.data : []);
     } catch {
       setRows([]);
     } finally {
@@ -146,15 +118,16 @@ export default function UsersPage() {
   };
 
   useEffect(() => {
+    if (authLoading || !isManager) return;
     fetchUsers();
-  }, []);
+  }, [authLoading, isManager]);
 
   const stats = useMemo(() => {
     return {
       total: rows.length,
       active: rows.filter((row) => row.status === 'active').length,
       disabled: rows.filter((row) => row.status === 'disabled').length,
-      managers: rows.filter((row) => row.roles.includes('manager')).length,
+      managers: rows.filter((row) => row.role === 'manager').length,
     };
   }, [rows]);
 
@@ -162,7 +135,7 @@ export default function UsersPage() {
     const q = normalizeArabic(search);
 
     return rows.filter((row) => {
-      const matchesRole = roleFilter === 'ALL' ? true : row.roles.includes(roleFilter);
+      const matchesRole = roleFilter === 'ALL' ? true : row.role === roleFilter;
       const matchesStatus = statusFilter === 'ALL' ? true : row.status === statusFilter;
 
       const haystack = normalizeArabic(
@@ -172,7 +145,7 @@ export default function UsersPage() {
           row.mobile,
           row.extension,
           row.operationalProject,
-          ...rolesLabelList(row.roles),
+          roleLabel(row.role),
           statusLabel(row.status),
         ]
           .filter(Boolean)
@@ -185,7 +158,6 @@ export default function UsersPage() {
   }, [rows, search, roleFilter, statusFilter]);
 
   const openEdit = (row: UserRow) => {
-    const roles = normalizeRoles(row.roles, row.role);
     setEditing(row);
     setForm({
       fullName: row.fullName || '',
@@ -193,8 +165,7 @@ export default function UsersPage() {
       mobile: row.mobile || '',
       extension: row.extension || '',
       operationalProject: row.operationalProject || row.department || '',
-      baseRole: roles.includes('warehouse') ? 'warehouse' : 'user',
-      managerAccess: roles.includes('manager'),
+      role: row.role,
       status: row.status,
       password: '',
       confirmPassword: '',
@@ -204,17 +175,6 @@ export default function UsersPage() {
   const closeEdit = () => {
     setEditing(null);
     setForm(emptyForm);
-  };
-
-  const buildRolesPayload = () => {
-    const roles: Role[] = ['user'];
-    if (form.baseRole === 'warehouse') {
-      roles.push('warehouse');
-    }
-    if (form.managerAccess) {
-      roles.push('manager');
-    }
-    return Array.from(new Set(roles));
   };
 
   const handleSave = async () => {
@@ -233,14 +193,13 @@ export default function UsersPage() {
     setSaving(true);
 
     try {
-      const roles = buildRolesPayload();
-      const payload: Record<string, unknown> = {
+      const payload: Record<string, string> = {
         fullName: form.fullName.trim(),
         email: form.email.trim(),
         mobile: form.mobile.trim(),
         extension: form.extension.trim(),
         operationalProject: form.operationalProject.trim(),
-        roles,
+        role: form.role,
         status: form.status,
       };
 
@@ -299,6 +258,24 @@ export default function UsersPage() {
     }
   };
 
+  if (authLoading) {
+    return (
+      <div className="space-y-4 sm:space-y-5">
+        <section className="rounded-[24px] border border-[#d6d7d4] bg-white px-4 py-4 shadow-sm sm:rounded-[28px] sm:px-5 sm:py-5">
+          <div className="space-y-2">
+            <Skeleton className="h-8 w-40 rounded-2xl" />
+            <Skeleton className="h-4 w-72 rounded-xl" />
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
+            {Array.from({ length: 4 }).map((_, index) => (
+              <Skeleton key={index} className="h-24 rounded-[22px]" />
+            ))}
+          </div>
+        </section>
+      </div>
+    );
+  }
+
   if (!isManager) {
     return (
       <div className="rounded-[22px] border border-red-200 bg-red-50 p-6 text-center text-red-700 sm:rounded-[26px]">
@@ -315,7 +292,7 @@ export default function UsersPage() {
             المستخدمون
           </h1>
           <p className="text-[13px] leading-7 text-[#61706f] sm:text-sm">
-            المدير فقط يتحكم بصلاحيات الحسابات، ويمكنه منح المستخدم صلاحية المدير مع بقاء دور الموظف.
+            الحسابات تعمل مباشرة بعد التسجيل. دور المدير هنا هو إدارة الدور وإيقاف الحساب أو تنشيطه عند الحاجة.
           </p>
         </div>
 
@@ -342,7 +319,7 @@ export default function UsersPage() {
           </Card>
 
           <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none sm:rounded-2xl">
-            <div className="text-[12px] text-[#6f7b7a]">من لديهم صلاحية مدير</div>
+            <div className="text-[12px] text-[#6f7b7a]">المديرون</div>
             <div className="mt-1 text-[22px] font-extrabold leading-none text-[#d0b284] sm:text-xl">
               {stats.managers}
             </div>
@@ -360,10 +337,12 @@ export default function UsersPage() {
           />
 
           <div className="space-y-2">
-            <label className="block text-sm font-semibold text-slate-700">الصلاحية</label>
+            <label className="block text-sm font-semibold text-slate-700">الدور</label>
             <select
               value={roleFilter}
-              onChange={(e) => setRoleFilter(e.target.value as 'ALL' | Role)}
+              onChange={(e) =>
+                setRoleFilter(e.target.value as 'ALL' | 'manager' | 'warehouse' | 'user')
+              }
               className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#016564] focus:ring-4 focus:ring-[#016564]/10"
             >
               <option value="ALL">الكل</option>
@@ -377,7 +356,9 @@ export default function UsersPage() {
             <label className="block text-sm font-semibold text-slate-700">الحالة</label>
             <select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as 'ALL' | 'active' | 'disabled')}
+              onChange={(e) =>
+                setStatusFilter(e.target.value as 'ALL' | 'active' | 'disabled')
+              }
               className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#016564] focus:ring-4 focus:ring-[#016564]/10"
             >
               <option value="ALL">الكل</option>
@@ -396,7 +377,7 @@ export default function UsersPage() {
             ))}
           </div>
         ) : filteredRows.length === 0 ? (
-          <Card className="rounded-[24px] border border-dashed border-[#d6d7d4] p-8 text-center text-[#61706f] sm:rounded-[28px]">
+          <Card className="rounded-[24px] border border-[#d6d7d4] p-8 text-center text-sm text-[#61706f] shadow-sm sm:rounded-[28px]">
             لا توجد نتائج مطابقة
           </Card>
         ) : (
@@ -412,11 +393,7 @@ export default function UsersPage() {
                       {row.fullName}
                     </div>
                     <Badge variant={statusVariant(row.status)}>{statusLabel(row.status)}</Badge>
-                    {normalizeRoles(row.roles, row.role).map((item) => (
-                      <Badge key={`${row.id}-${item}`} variant="info">
-                        {roleLabel(item)}
-                      </Badge>
-                    ))}
+                    <Badge variant="info">{roleLabel(row.role)}</Badge>
                   </div>
 
                   <div className="grid gap-2 text-[12px] text-[#61706f] sm:grid-cols-2 sm:text-xs">
@@ -473,15 +450,9 @@ export default function UsersPage() {
                 </div>
               </div>
 
-              <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl sm:col-span-2">
-                <div className="text-xs font-bold text-[#016564]">الصلاحيات</div>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {normalizeRoles(selected.roles, selected.role).map((item) => (
-                    <Badge key={`selected-${item}`} variant="info">
-                      {roleLabel(item)}
-                    </Badge>
-                  ))}
-                </div>
+              <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl">
+                <div className="text-xs font-bold text-[#016564]">الدور</div>
+                <div className="mt-1 text-sm leading-7 text-[#304342]">{roleLabel(selected.role)}</div>
               </div>
 
               <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl">
@@ -560,19 +531,20 @@ export default function UsersPage() {
               />
 
               <div className="space-y-2">
-                <label className="block text-sm font-semibold text-slate-700">الدور التشغيلي</label>
+                <label className="block text-sm font-semibold text-slate-700">الدور</label>
                 <select
-                  value={form.baseRole}
+                  value={form.role}
                   onChange={(e) =>
                     setForm((prev) => ({
                       ...prev,
-                      baseRole: e.target.value as 'warehouse' | 'user',
+                      role: e.target.value as 'manager' | 'warehouse' | 'user',
                     }))
                   }
                   className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#016564] focus:ring-4 focus:ring-[#016564]/10"
                 >
-                  <option value="user">موظف</option>
+                  <option value="manager">مدير</option>
                   <option value="warehouse">مسؤول مخزن</option>
+                  <option value="user">موظف</option>
                 </select>
               </div>
 
@@ -591,26 +563,6 @@ export default function UsersPage() {
                   <option value="active">نشط</option>
                   <option value="disabled">موقوف</option>
                 </select>
-              </div>
-
-              <div className="sm:col-span-2 rounded-[18px] border border-[#e7ebea] bg-[#fbfcfc] p-4">
-                <label className="flex items-center gap-3 text-sm font-semibold text-slate-700">
-                  <input
-                    type="checkbox"
-                    checked={form.managerAccess}
-                    onChange={(e) =>
-                      setForm((prev) => ({
-                        ...prev,
-                        managerAccess: e.target.checked,
-                      }))
-                    }
-                    className="h-5 w-5 rounded border-slate-300 text-[#016564] focus:ring-[#016564]"
-                  />
-                  منح صلاحية المدير مع بقاء دور الموظف
-                </label>
-                <p className="mt-2 text-xs leading-6 text-[#61706f]">
-                  عند التفعيل سيصبح الحساب قادرًا على دخول صلاحيات المدير مع الاحتفاظ بصلاحية الموظف.
-                </p>
               </div>
 
               <div className="sm:col-span-2">
