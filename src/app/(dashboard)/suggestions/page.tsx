@@ -12,7 +12,7 @@ import { useAuth } from '@/context/AuthContext';
 
 type SuggestionType = 'MAINTENANCE' | 'CLEANING' | 'PURCHASE' | 'OTHER';
 type SuggestionStatus = 'PENDING' | 'UNDER_REVIEW' | 'APPROVED' | 'REJECTED' | 'IMPLEMENTED';
-type RequestScope = 'PROGRAM' | 'GENERAL';
+type RequestScope = 'PROGRAM' | 'BUILDING';
 
 type SuggestionRow = {
   id: string;
@@ -47,7 +47,7 @@ type FormState = {
 };
 
 const DEFAULT_FORM: FormState = {
-  scope: 'GENERAL',
+  scope: 'BUILDING',
   programName: '',
   location: '',
   area: '',
@@ -269,7 +269,9 @@ export default function SuggestionsPage() {
     const areaName = form.area === 'أخرى' ? form.customArea.trim() : form.area.trim();
     const quantityValue = Math.max(1, Number(form.quantity || 1));
     const uploadedNames = attachments.map((file) => file.name).join(' | ');
-    const scopeText = form.scope === 'PROGRAM' ? `مرتبط ببرنامج تدريبي: ${form.programName || 'نعم'}` : 'طلب عام يخص المبنى';
+    const scopeText = form.scope === 'PROGRAM'
+      ? `مصدر الحاجة: مرتبط ببرنامج تدريبي وتحسين تجربة المتدربين${form.programName ? ` | اسم البرنامج: ${form.programName}` : ''}`
+      : 'مصدر الحاجة: مرتبط بملاحظة عامة في المبنى وقد تؤثر على تجربة جميع المستفيدين';
 
     let title = buildPageTitle(activeType);
     let description = form.issueSummary.trim();
@@ -426,14 +428,14 @@ export default function SuggestionsPage() {
         </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-2">
-              <label className="block text-sm font-semibold text-slate-700">نوع الطلب</label>
+              <label className="block text-sm font-semibold text-slate-700">مصدر الحاجة</label>
               <select
                 value={form.scope}
                 onChange={(e) => updateForm('scope', e.target.value as RequestScope)}
                 className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#016564] focus:ring-4 focus:ring-[#016564]/10"
               >
-                <option value="GENERAL">طلب عام يخص المبنى</option>
-                <option value="PROGRAM">مرتبط ببرنامج تدريبي</option>
+                <option value="BUILDING">مرتبط بملاحظة عامة في المبنى وقد تؤثر على تجربة جميع المستفيدين</option>
+                <option value="PROGRAM">مرتبط ببرنامج تدريبي وتحسين تجربة المتدربين</option>
               </select>
             </div>
 
@@ -447,7 +449,7 @@ export default function SuggestionsPage() {
 
           {form.scope === 'PROGRAM' ? (
             <Input
-              label="اسم البرنامج التدريبي"
+              label="اسم البرنامج التدريبي (إن وجد)"
               value={form.programName}
               onChange={(e) => updateForm('programName', e.target.value)}
               placeholder="اكتب اسم البرنامج إن وجد"
