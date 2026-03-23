@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
+import { Input } from '@/components/ui/Input';
 import { useAuth } from '@/context/AuthContext';
 import {
   InventoryNotification,
@@ -13,15 +14,15 @@ import {
   markNotificationRead,
 } from '@/lib/notifications';
 
-type FilterKey = 'ALL' | 'UNREAD' | 'ALERT' | 'NOTIFICATION' | 'CRITICAL';
+type FilterKey = 'ALL' | 'UNREAD' | 'ALERT' | 'NOTIFICATION' | 'CRITICAL' | 'ACTION';
 
 type NotificationMeta = InventoryNotification & {
-  entityType?: string;
-  entityId?: string;
+  entityType?: string | null;
+  entityId?: string | null;
 };
 
 function formatDate(date?: string) {
-  if (!date) return '-';
+  if (!date) return '—';
   try {
     return new Date(date).toLocaleString('ar-SA', {
       year: 'numeric',
@@ -33,6 +34,19 @@ function formatDate(date?: string) {
   } catch {
     return date;
   }
+}
+
+function normalizeArabic(value: string) {
+  return (value || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[أإآ]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
+    .replace(/ؤ/g, 'و')
+    .replace(/ئ/g, 'ي')
+    .replace(/ء/g, '')
+    .replace(/\s+/g, ' ');
 }
 
 function typeLabel(item: InventoryNotification) {
@@ -57,6 +71,12 @@ function itemClasses(item: InventoryNotification) {
   return 'border-slate-200 bg-white';
 }
 
+function badgeClasses(item: InventoryNotification) {
+  if (item.severity === 'critical') return 'bg-[#7c1e3e]/10 text-[#7c1e3e]';
+  if (item.kind === 'alert' || item.severity === 'action') return 'bg-[#d0b284]/15 text-[#8a6a28]';
+  return 'bg-[#016564]/10 text-[#016564]';
+}
+
 function resolveItemLink(item: InventoryNotification): string | null {
   const meta = item as NotificationMeta;
 
@@ -64,27 +84,14 @@ function resolveItemLink(item: InventoryNotification): string | null {
     return item.link;
   }
 
-  const entityType = (meta.entityType || '').toLowerCase();
+  const entityType = String(meta.entityType || '').toLowerCase();
 
-  if (entityType === 'message' && meta.entityId) {
-    return `/messages?open=${meta.entityId}`;
-  }
-
-  if (entityType === 'request' && meta.entityId) {
-    return `/requests?open=${meta.entityId}`;
-  }
-
-  if (entityType === 'return' && meta.entityId) {
-    return `/returns?open=${meta.entityId}`;
-  }
-
-  if (entityType === 'custody' && meta.entityId) {
-    return `/custody?open=${meta.entityId}`;
-  }
-
-  if (entityType === 'inventory' && meta.entityId) {
-    return `/inventory?open=${meta.entityId}`;
-  }
+  if (entityType === 'message' && meta.entityId) return `/messages?open=${meta.entityId}`;
+  if (entityType === 'request' && meta.entityId) return `/requests?open=${meta.entityId}`;
+  if (entityType === 'return' && meta.entityId) return `/returns?open=${meta.entityId}`;
+  if (entityType === 'custody' && meta.entityId) return `/custody?open=${meta.entityId}`;
+  if (entityType === 'inventory' && meta.entityId) return `/inventory?open=${meta.entityId}`;
+  if (entityType === 'suggestion' && meta.entityId) return '/dashboard';
 
   return null;
 }
@@ -93,6 +100,7 @@ export default function NotificationsPage() {
   const router = useRouter();
   const { user } = useAuth();
   const [filter, setFilter] = useState<FilterKey>('ALL');
+  const [search, setSearch] = useState('');
   const [items, setItems] = useState<InventoryNotification[]>([]);
 
   useEffect(() => {
@@ -116,16 +124,35 @@ export default function NotificationsPage() {
       unread: items.filter((item) => !item.isRead).length,
       alerts: items.filter((item) => item.kind === 'alert').length,
       critical: items.filter((item) => item.severity === 'critical').length,
+      actions: items.filter((item) => item.severity === 'action').length,
     };
   }, [items]);
 
   const filteredItems = useMemo(() => {
-    if (filter === 'UNREAD') return items.filter((item) => !item.isRead);
-    if (filter === 'ALERT') return items.filter((item) => item.kind === 'alert');
-    if (filter === 'NOTIFICATION') return items.filter((item) => item.kind === 'notification');
-    if (filter === 'CRITICAL') return items.filter((item) => item.severity === 'critical');
-    return items;
-  }, [filter, items]);
+    const q = normalizeArabic(search);
+
+    return items.filter((item) => {
+      const matchesFilter =
+        filter === 'ALL'
+          ? true
+          : filter === 'UNREAD'
+          ? !item.isRead
+          : filter === 'ALERT'
+          ? item.kind === 'alert'
+          : filter === 'NOTIFICATION'
+          ? item.kind === 'notification'
+          : filter === 'CRITICAL'
+          ? item.severity === 'critical'
+          : item.severity === 'action';
+
+      const haystack = normalizeArabic(
+        [item.title, item.message, item.entityType, item.entityId].filter(Boolean).join(' ')
+      );
+
+      const matchesSearch = q ? haystack.includes(q) : true;
+      return matchesFilter && matchesSearch;
+    });
+  }, [filter, items, search]);
 
   const handleMarkAllRead = () => {
     if (!user?.id) return;
@@ -141,10 +168,6 @@ export default function NotificationsPage() {
   const handleOpenItem = (item: InventoryNotification) => {
     const target = resolveItemLink(item);
 
-    if (!target) {
-      return;
-    }
-
     if (!item.isRead) {
       markNotificationRead(item.id);
       if (user?.id) {
@@ -152,19 +175,21 @@ export default function NotificationsPage() {
       }
     }
 
-    router.push(target);
+    if (target) {
+      router.push(target);
+    }
   };
 
   return (
-    <div className="space-y-4 sm:space-y-6">
-      <div className="rounded-[24px] border border-surface-border bg-white p-4 shadow-soft sm:rounded-[28px] sm:p-5">
+    <div className="space-y-4 sm:space-y-5">
+      <section className="rounded-[24px] border border-[#d6d7d4] bg-white px-4 py-4 shadow-sm sm:rounded-[28px] sm:px-5 sm:py-5">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
-            <h1 className="text-[24px] leading-[1.25] text-primary sm:text-[30px]">
+            <h1 className="text-[24px] font-extrabold leading-[1.25] text-[#016564] sm:text-[30px]">
               الإشعارات والتنبيهات
             </h1>
-            <p className="mt-2 text-[13px] leading-7 text-surface-subtle sm:text-[14px]">
-              سجل موحد يوضح ما يخصك من مستجدات تشغيلية، واعتمادات، وإرجاعات، وتنبيهات مرتبطة بالمخزون أو العهد.
+            <p className="mt-2 text-[13px] leading-7 text-[#61706f] sm:text-sm">
+              سجل موحد يوضح ما يخصك من مستجدات تشغيلية واعتمادات ورسائل وتنبيهات مرتبطة بالمخزون أو العهد أو المسارات الخدمية.
             </p>
           </div>
 
@@ -173,126 +198,117 @@ export default function NotificationsPage() {
           </Button>
         </div>
 
-        <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-4 sm:mt-5 sm:gap-4">
-          <Card className="rounded-[20px] border border-slate-200 bg-slate-50 p-3 shadow-none sm:rounded-[22px] sm:p-4">
-            <div className="text-[12px] text-slate-600 sm:text-[13px]">إجمالي العناصر</div>
-            <div className="mt-2 text-[24px] leading-none text-slate-900 sm:text-[32px]">
-              {stats.total}
-            </div>
+        <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-5">
+          <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none sm:rounded-2xl">
+            <div className="text-[12px] text-[#6f7b7a]">إجمالي الإشعارات</div>
+            <div className="mt-1 text-[22px] font-extrabold leading-none text-[#016564]">{stats.total}</div>
           </Card>
-
-          <Card className="rounded-[20px] border border-emerald-200 bg-emerald-50 p-3 shadow-none sm:rounded-[22px] sm:p-4">
-            <div className="text-[12px] text-emerald-700 sm:text-[13px]">غير المقروء</div>
-            <div className="mt-2 text-[24px] leading-none text-slate-900 sm:text-[32px]">
-              {stats.unread}
-            </div>
+          <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none sm:rounded-2xl">
+            <div className="text-[12px] text-[#6f7b7a]">غير المقروءة</div>
+            <div className="mt-1 text-[22px] font-extrabold leading-none text-[#d0b284]">{stats.unread}</div>
           </Card>
-
-          <Card className="rounded-[20px] border border-amber-200 bg-amber-50 p-3 shadow-none sm:rounded-[22px] sm:p-4">
-            <div className="text-[12px] text-amber-700 sm:text-[13px]">التنبيهات</div>
-            <div className="mt-2 text-[24px] leading-none text-slate-900 sm:text-[32px]">
-              {stats.alerts}
-            </div>
+          <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none sm:rounded-2xl">
+            <div className="text-[12px] text-[#6f7b7a]">التنبيهات</div>
+            <div className="mt-1 text-[22px] font-extrabold leading-none text-[#8a6a28]">{stats.alerts}</div>
           </Card>
-
-          <Card className="rounded-[20px] border border-rose-200 bg-rose-50 p-3 shadow-none sm:rounded-[22px] sm:p-4">
-            <div className="text-[12px] text-rose-700 sm:text-[13px]">العناصر الحرجة</div>
-            <div className="mt-2 text-[24px] leading-none text-slate-900 sm:text-[32px]">
-              {stats.critical}
-            </div>
+          <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none sm:rounded-2xl">
+            <div className="text-[12px] text-[#6f7b7a]">الحرجة</div>
+            <div className="mt-1 text-[22px] font-extrabold leading-none text-[#7c1e3e]">{stats.critical}</div>
+          </Card>
+          <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none sm:rounded-2xl">
+            <div className="text-[12px] text-[#6f7b7a]">تحتاج إجراء</div>
+            <div className="mt-1 text-[22px] font-extrabold leading-none text-[#016564]">{stats.actions}</div>
           </Card>
         </div>
+      </section>
 
-        <div className="mt-4 flex flex-wrap gap-2 sm:mt-5">
-          {[
-            { key: 'ALL', label: 'الكل' },
-            { key: 'UNREAD', label: 'غير المقروء' },
-            { key: 'ALERT', label: 'التنبيهات' },
-            { key: 'NOTIFICATION', label: 'الإشعارات' },
-            { key: 'CRITICAL', label: 'الحرجة' },
-          ].map((tab) => (
-            <button
-              key={tab.key}
-              onClick={() => setFilter(tab.key as FilterKey)}
-              className={`min-h-[42px] rounded-full px-4 py-2 text-sm transition ${
-                filter === tab.key
-                  ? 'bg-[#016564] text-white'
-                  : 'border border-slate-200 bg-white text-slate-700'
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
+      <section className="rounded-[24px] border border-[#d6d7d4] bg-white p-4 shadow-sm sm:rounded-[28px] sm:p-5">
+        <div className="grid gap-3 lg:grid-cols-[1fr_auto]">
+          <Input
+            label="بحث"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="العنوان، المحتوى، أو نوع الإشعار"
+          />
+
+          <div className="flex flex-wrap gap-2 self-end">
+            {[
+              ['ALL', 'الكل'],
+              ['UNREAD', 'غير المقروءة'],
+              ['ALERT', 'التنبيهات'],
+              ['NOTIFICATION', 'الإشعارات'],
+              ['CRITICAL', 'الحرجة'],
+              ['ACTION', 'تحتاج إجراء'],
+            ].map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setFilter(key as FilterKey)}
+                className={`rounded-full px-4 py-2 text-xs transition ${
+                  filter === key
+                    ? 'bg-[#016564] text-white'
+                    : 'border border-slate-200 bg-white text-slate-600'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      </section>
 
-      <div className="space-y-3 sm:space-y-4">
+      <section className="space-y-3">
         {filteredItems.length === 0 ? (
-          <Card className="rounded-[24px] border border-dashed border-slate-200 p-8 text-center text-slate-500 sm:rounded-[28px] sm:p-10">
-            لا توجد عناصر مطابقة لهذا التصنيف
+          <Card className="rounded-[24px] border border-[#d6d7d4] p-8 text-center text-sm text-[#61706f] shadow-sm sm:rounded-[28px]">
+            لا توجد إشعارات مطابقة
           </Card>
         ) : (
           filteredItems.map((item) => (
             <Card
               key={item.id}
-              className={`rounded-[24px] border p-4 shadow-soft sm:rounded-[28px] sm:p-5 ${itemClasses(item)}`}
+              className={`rounded-[24px] border p-4 shadow-sm transition sm:rounded-[28px] sm:p-5 ${itemClasses(item)}`}
             >
               <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div className="min-w-0 flex-1">
+                <div className="min-w-0 space-y-3">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-full bg-white/90 px-3 py-1 text-[11px] leading-none text-slate-700">
-                      {typeLabel(item)}
-                    </span>
-                    <span className="rounded-full bg-white/90 px-3 py-1 text-[11px] leading-none text-slate-700">
-                      {severityLabel(item)}
-                    </span>
+                    <span className={`rounded-full px-3 py-1 text-[11px] ${badgeClasses(item)}`}>{typeLabel(item)}</span>
+                    <span className={`rounded-full px-3 py-1 text-[11px] ${badgeClasses(item)}`}>{severityLabel(item)}</span>
                     {!item.isRead ? (
-                      <span className="rounded-full bg-[#016564]/10 px-3 py-1 text-[11px] leading-none text-[#016564]">
+                      <span className="rounded-full bg-[#d0b284]/15 px-3 py-1 text-[11px] text-[#8a6a28]">
                         جديد
                       </span>
                     ) : null}
                   </div>
 
-                  <h2 className="mt-3 break-words text-[18px] leading-8 text-slate-900 sm:text-[20px]">
+                  <div className="break-words text-[15px] font-bold leading-7 text-[#152625] sm:text-base">
                     {item.title}
-                  </h2>
-                  <p className="mt-2 break-words text-[13px] leading-7 text-slate-600 sm:text-[14px] sm:leading-8">
-                    {item.message}
-                  </p>
-                  <div className="mt-3 text-[12px] leading-6 text-slate-500">
+                  </div>
+
+                  <div className="break-words text-sm leading-7 text-[#304342]">{item.message}</div>
+
+                  <div className="text-[12px] text-[#61706f]">
                     {formatDate(item.createdAt)}
                   </div>
                 </div>
 
-                <div className="flex w-full shrink-0 flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap">
+                <div className="flex w-full flex-col gap-2 sm:w-auto">
                   {!item.isRead ? (
-                    <Button
-                      variant="secondary"
-                      onClick={() => handleMarkRead(item.id)}
-                      className="w-full sm:w-auto"
-                    >
+                    <Button variant="ghost" onClick={() => handleMarkRead(item.id)} className="w-full sm:w-auto">
                       تعليم كمقروء
                     </Button>
                   ) : null}
 
                   {resolveItemLink(item) ? (
-                    <Button
-                      onClick={() => handleOpenItem(item)}
-                      className="w-full sm:w-auto"
-                    >
-                      فتح
+                    <Button onClick={() => handleOpenItem(item)} className="w-full sm:w-auto">
+                      فتح العنصر
                     </Button>
-                  ) : (
-                    <Button disabled className="w-full sm:w-auto">
-                      لا يوجد مسار
-                    </Button>
-                  )}
+                  ) : null}
                 </div>
               </div>
             </Card>
           ))
         )}
-      </div>
+      </section>
     </div>
   );
 }
