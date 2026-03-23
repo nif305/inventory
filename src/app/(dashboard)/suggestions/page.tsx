@@ -419,16 +419,11 @@ export default function SuggestionsPage() {
     const areaOptions = activeType === 'MAINTENANCE' ? MAINTENANCE_PARTS : CLEANING_AREAS;
 
     return (
-      <section className="rounded-[24px] border border-[#d6d7d4] bg-white p-4 shadow-sm sm:rounded-[28px] sm:p-5">
-        <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
-            <h1 className="text-[24px] font-extrabold leading-[1.25] text-[#016564] sm:text-[30px]">{title}</h1>
-            <p className="mt-2 text-[13px] leading-7 text-[#61706f] sm:text-sm">نموذج مبسط ومباشر لإرسال الطلب إلى المدير للمراجعة.</p>
-          </div>
-          <Button variant="ghost" onClick={closeCreateMode} className="min-w-[90px]">إلغاء</Button>
+      <form onSubmit={handleCreate} className="space-y-4">
+        <div>
+          <h1 className="text-[22px] font-extrabold leading-[1.25] text-[#016564] sm:text-[26px]">{title}</h1>
+          <p className="mt-2 text-[13px] leading-7 text-[#61706f] sm:text-sm">نموذج مبسط ومباشر لإرسال الطلب إلى المدير للمراجعة.</p>
         </div>
-
-        <form onSubmit={handleCreate} className="space-y-4">
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-2">
               <label className="block text-sm font-semibold text-slate-700">نوع الطلب</label>
@@ -571,22 +566,29 @@ export default function SuggestionsPage() {
             <Button type="submit" loading={submitting} className="w-full sm:w-auto">إرسال الطلب</Button>
           </div>
         </form>
-      </section>
     );
   }
 
   return (
     <div className="space-y-4 sm:space-y-5">
-      {isCreateMode ? renderCreateForm() : null}
-
       <section className="rounded-[24px] border border-[#d6d7d4] bg-white px-4 py-4 shadow-sm sm:rounded-[28px] sm:px-5 sm:py-5">
-        <div className="space-y-2">
-          <h2 className="text-[24px] font-extrabold leading-[1.25] text-[#016564] sm:text-[30px]">
-            {isCreateMode ? 'الطلبات المرفوعة' : 'الطلبات الأخرى'}
-          </h2>
-          <p className="text-[13px] leading-7 text-[#61706f] sm:text-sm">
-            متابعة طلبات الصيانة، النظافة، الشراء المباشر، والطلبات الأخرى بعد رفعها.
-          </p>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="space-y-2">
+            <h2 className="text-[24px] font-extrabold leading-[1.25] text-[#016564] sm:text-[30px]">
+              الطلبات المرفوعة
+            </h2>
+            <p className="text-[13px] leading-7 text-[#61706f] sm:text-sm">
+              متابعة طلبات الصيانة، النظافة، الشراء المباشر، والطلبات الأخرى بعد رفعها.
+            </p>
+          </div>
+          {!canManage ? (
+            <Button
+              className="w-full sm:w-auto"
+              onClick={() => router.push('/suggestions?new=1&type=OTHER')}
+            >
+              طلب جديد
+            </Button>
+          ) : null}
         </div>
 
         <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
@@ -666,6 +668,14 @@ export default function SuggestionsPage() {
           })
         )}
       </section>
+
+      <Modal
+        isOpen={isCreateMode}
+        onClose={closeCreateMode}
+        title={buildPageTitle(activeType)}
+      >
+        {isCreateMode ? renderCreateForm() : null}
+      </Modal>
 
       <Modal
         isOpen={!!selected}
