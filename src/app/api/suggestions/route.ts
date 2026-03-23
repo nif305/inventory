@@ -11,16 +11,6 @@ import {
 
 const prisma = new PrismaClient();
 
-type AttachmentLike = {
-  filename?: string;
-  name?: string;
-  contentType?: string;
-  type?: string;
-  base64Content?: string;
-  base64?: string;
-  data?: string;
-};
-
 function mapRole(role: string): Role {
   const normalized = String(role || '').trim().toLowerCase();
   if (normalized === 'manager') return Role.MANAGER;
@@ -118,6 +108,23 @@ function normalizeTargetDepartment(value?: string) {
   return raw;
 }
 
+function escapeHtml(value?: string | null) {
+  return String(value || '—')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function parseJsonObject(value?: string | null) {
+  if (!value) return {} as Record<string, any>;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {} as Record<string, any>;
+  }
+}
+
 function formatDateTime(value: Date | string) {
   const dateValue = typeof value === 'string' ? new Date(value) : value;
 
@@ -139,56 +146,33 @@ function formatDateTime(value: Date | string) {
   return { date, time };
 }
 
-function escapeHtml(value?: string | null) {
-  return String(value || '—')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
-function parseJsonObject(value?: string | null) {
-  if (!value) return {} as Record<string, any>;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return {} as Record<string, any>;
-  }
-}
-
-function normalizeAttachments(value: any): AttachmentLike[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => {
-      if (typeof item === 'string') {
-        return { filename: item };
-      }
-      return item || {};
-    })
-    .filter(Boolean);
-}
-
-function buildMemoTable(rows: Array<Array<[string, string]>>) {
+function buildFourColumnMemoTable(rows: string[]) {
   return `
 <table dir="rtl" style="width:100%;border-collapse:collapse;font-family:Tahoma,Arial,sans-serif;font-size:14px;table-layout:fixed">
   <tbody>
-    ${rows
-      .map(
-        (row) => `
-      <tr>
-        ${row
-          .map(
-            ([label, value]) => `
-          <td style="width:${row.length === 1 ? '20%' : row.length === 2 ? '20%' : '12%'};border:1px solid #d6d7d4;background:#f8f9f9;padding:10px;font-weight:bold;color:#1f3d3c;vertical-align:top">${escapeHtml(label)}</td>
-          <td style="width:${row.length === 1 ? '80%' : row.length === 2 ? '30%' : '21.3%'};border:1px solid #d6d7d4;padding:10px;color:#304342;vertical-align:top;word-break:break-word">${escapeHtml(value)}</td>
-          `
-          )
-          .join('')}
-      </tr>`
-      )
-      .join('')}
+    ${rows.join('')}
   </tbody>
 </table>
+  `.trim();
+}
+
+function buildPairRow(label1: string, value1: string, label2: string, value2: string) {
+  return `
+<tr>
+  <td style="width:16%;border:1px solid #d6d7d4;background:#f8f9f9;padding:10px;font-weight:bold;color:#1f3d3c;vertical-align:top">${escapeHtml(label1)}</td>
+  <td style="width:34%;border:1px solid #d6d7d4;padding:10px;color:#304342;vertical-align:top;word-break:break-word">${escapeHtml(value1)}</td>
+  <td style="width:16%;border:1px solid #d6d7d4;background:#f8f9f9;padding:10px;font-weight:bold;color:#1f3d3c;vertical-align:top">${escapeHtml(label2)}</td>
+  <td style="width:34%;border:1px solid #d6d7d4;padding:10px;color:#304342;vertical-align:top;word-break:break-word">${escapeHtml(value2)}</td>
+</tr>
+  `.trim();
+}
+
+function buildMergedRow(label: string, value: string) {
+  return `
+<tr>
+  <td style="width:16%;border:1px solid #d6d7d4;background:#f8f9f9;padding:10px;font-weight:bold;color:#1f3d3c;vertical-align:top">${escapeHtml(label)}</td>
+  <td colspan="3" style="border:1px solid #d6d7d4;padding:10px;color:#304342;vertical-align:top;word-break:break-word;line-height:1.95">${escapeHtml(value)}</td>
+</tr>
   `.trim();
 }
 
@@ -263,26 +247,15 @@ function buildMemoBody(params: {
       ? 'طلب شراء مباشر'
       : 'طلب آخر';
 
-  const table = buildMemoTable([
-    [
-      ['رقم الطلب', params.requestCode],
-      ['تاريخ الطلب', date],
-      ['وقت الطلب', time],
-    ],
-    [['نوع الطلب', requestTypeLabel]],
-    [
-      ['مقدم الطلب', params.requesterName],
-      ['الإدارة', params.requesterDepartment],
-      ['البريد الإلكتروني', params.requesterEmail],
-    ],
-    [
-      ['الموقع', params.location],
-      ['عدد الملاحظات', params.notesCount],
-    ],
-    [['التفاصيل', params.description]],
-    [['حيثيات الطلب', params.sourcePurpose]],
-    [['السبب/ الملاحظة', params.justification]],
-    [['ملاحظة المدير', params.adminNotes]],
+  const table = buildFourColumnMemoTable([
+    buildPairRow('رقم الطلب', params.requestCode, 'تاريخ الطلب', `${date} | ${time}`),
+    buildMergedRow('نوع الطلب', requestTypeLabel),
+    buildPairRow('مقدم الطلب', params.requesterName, 'الإدارة', `${params.requesterDepartment} | ${params.requesterEmail}`),
+    buildPairRow('الموقع', params.location, 'عدد الملاحظات', params.notesCount),
+    buildMergedRow('التفاصيل', params.description),
+    buildMergedRow('حيثيات الطلب', params.sourcePurpose),
+    buildMergedRow('السبب/ الملاحظة', params.justification),
+    buildMergedRow('ملاحظة المدير', params.adminNotes),
   ]);
 
   const intro =
@@ -306,6 +279,11 @@ function buildMemoBody(params: {
   ${closing}
 </div>
   `.trim();
+}
+
+function normalizeAttachments(value: any) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => (typeof item === 'string' ? { filename: item } : item || {})).filter(Boolean);
 }
 
 function resolveRecipients(category: string, requesterEmail?: string | null, externalRecipient?: string) {
