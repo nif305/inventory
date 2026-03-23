@@ -28,9 +28,9 @@ function encodeQuotedPrintable(input: string) {
       lineLength = 0;
     }
     out += chunk;
-    const lastBreak = chunk.lastIndexOf('\r\n');
-    if (lastBreak >= 0) {
-      lineLength = chunk.length - lastBreak - 2;
+    const idx = chunk.lastIndexOf('\r\n');
+    if (idx >= 0) {
+      lineLength = chunk.length - idx - 2;
     } else {
       lineLength += chunk.length;
     }
@@ -46,13 +46,13 @@ function encodeQuotedPrintable(input: string) {
       continue;
     }
 
-    const isSafe =
+    const safe =
       (byte >= 33 && byte <= 60) ||
       (byte >= 62 && byte <= 126) ||
       byte === 9 ||
       byte === 32;
 
-    if (isSafe) {
+    if (safe) {
       push(String.fromCharCode(byte));
     } else {
       push(`=${byte.toString(16).toUpperCase().padStart(2, '0')}`);
@@ -109,9 +109,8 @@ function buildHtmlDocument(body: string) {
     '<html>',
     '<head>',
     '<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">',
-    '<style type="text/css">P {margin-top:0;margin-bottom:0;}</style>',
     '</head>',
-    '<body dir="rtl">',
+    '<body dir="rtl" style="font-family:Cairo, Tahoma, Arial, sans-serif;">',
     body || '<div>—</div>',
     '</body>',
     '</html>',
@@ -126,13 +125,13 @@ function buildDraftEml(params: {
   attachments?: Array<{ filename: string; contentType: string; base64Content: string }>;
 }) {
   const hasAttachments = Array.isArray(params.attachments) && params.attachments.length > 0;
-  const outerBoundary = `----=_Outer_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  const mixedBoundary = `----=_Mixed_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   const altBoundary = `----=_Alt_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
   const htmlDoc = buildHtmlDocument(params.htmlBody);
   const plainText = 'هذه مسودة بريد قابلة للتعديل.';
 
-  const headers = [
+  const parts: string[] = [
     'X-Unsent: 1',
     `From: ${sanitizeHeader(params.from)}`,
     `To: ${sanitizeHeader(params.to)}`,
@@ -141,16 +140,14 @@ function buildDraftEml(params: {
     'Content-Language: ar-SA',
     'MIME-Version: 1.0',
     hasAttachments
-      ? `Content-Type: multipart/mixed; boundary="${outerBoundary}"`
+      ? `Content-Type: multipart/mixed; boundary="${mixedBoundary}"`
       : `Content-Type: multipart/alternative; boundary="${altBoundary}"`,
     '',
   ];
 
-  const parts: string[] = [];
-
   if (hasAttachments) {
     parts.push(
-      `--${outerBoundary}`,
+      `--${mixedBoundary}`,
       `Content-Type: multipart/alternative; boundary="${altBoundary}"`,
       '',
     );
@@ -173,23 +170,23 @@ function buildDraftEml(params: {
     '',
   );
 
-  if (hasAttachments) {
-    for (const attachment of params.attachments || []) {
-      parts.push(
-        `--${outerBoundary}`,
-        `Content-Type: ${sanitizeHeader(attachment.contentType)}; name="${sanitizeHeader(attachment.filename)}"`,
-        `Content-Disposition: attachment; filename="${sanitizeHeader(attachment.filename)}"`,
-        'Content-Transfer-Encoding: base64',
-        '',
-        attachment.base64Content,
-        '',
-      );
-    }
-
-    parts.push(`--${outerBoundary}--`, '');
+  for (const attachment of params.attachments || []) {
+    parts.push(
+      `--${mixedBoundary}`,
+      `Content-Type: ${sanitizeHeader(attachment.contentType)}; name="${sanitizeHeader(attachment.filename)}"`,
+      `Content-Disposition: attachment; filename="${sanitizeHeader(attachment.filename)}"`,
+      'Content-Transfer-Encoding: base64',
+      '',
+      attachment.base64Content,
+      '',
+    );
   }
 
-  return [...headers, ...parts].join('\r\n');
+  if (hasAttachments) {
+    parts.push(`--${mixedBoundary}--`, '');
+  }
+
+  return parts.join('\r\n');
 }
 
 export async function GET(
