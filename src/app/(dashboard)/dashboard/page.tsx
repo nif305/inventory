@@ -1,4 +1,3 @@
-
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
@@ -633,34 +632,34 @@ function ManagerDashboard({ fullName }: { fullName?: string }) {
   const [returns, setReturns] = useState<ReturnRequest[]>([]);
   const [custody, setCustody] = useState<CustodyItem[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [suggestions, setSuggestions] = useState<SuggestionItem[]>([]);
   const [auditLogs, setAuditLogs] = useState<Array<{ id: string; action: string; entity: string; entityId?: string | null; createdAt: string; user?: { fullName?: string; role?: string | null } | null }>>([]);
+  const [suggestions, setSuggestions] = useState<SuggestionItem[]>([]);
 
   useEffect(() => {
     let mounted = true;
 
     const load = async () => {
-      const [requestsRes, inventoryRes, suggestionsRes, auditRes] = await Promise.all([
+      const [requestsRes, inventoryRes, auditRes, suggestionsRes] = await Promise.all([
         fetch('/api/requests', { cache: 'no-store' }),
         fetch('/api/inventory?limit=200', { cache: 'no-store' }),
-        fetch('/api/suggestions', { cache: 'no-store' }).catch(() => null),
         fetch('/api/audit-logs?limit=20', { cache: 'no-store' }).catch(() => null),
+        fetch('/api/suggestions', { cache: 'no-store' }).catch(() => null),
       ]);
 
       const requestsJson = await requestsRes.json().catch(() => null);
       const inventoryJson = await inventoryRes.json().catch(() => null);
-      const suggestionsJson = suggestionsRes ? await suggestionsRes.json().catch(() => null) : null;
       const auditJson = auditRes ? await auditRes.json().catch(() => null) : null;
+      const suggestionsJson = suggestionsRes ? await suggestionsRes.json().catch(() => null) : null;
 
       if (!mounted) return;
 
       setRequests(Array.isArray(requestsJson?.data) ? requestsJson.data : []);
       setInventory(Array.isArray(inventoryJson?.data) ? inventoryJson.data : []);
-      setSuggestions(Array.isArray(suggestionsJson?.data) ? suggestionsJson.data : []);
       setReturns(loadLocal<ReturnRequest>(RETURNS_STORAGE_KEY));
       setCustody(loadLocal<CustodyItem>(CUSTODY_STORAGE_KEY));
       setNotifications(loadLocal<NotificationItem>(NOTIFICATIONS_STORAGE_KEY));
       setAuditLogs(Array.isArray(auditJson?.data) ? auditJson.data : []);
+      setSuggestions(Array.isArray(suggestionsJson?.data) ? suggestionsJson.data : []);
     };
 
     load();
@@ -669,152 +668,169 @@ function ManagerDashboard({ fullName }: { fullName?: string }) {
     };
   }, []);
 
-  const stats = useMemo(() => {
-    const pendingRequests = requests.filter((item) => item.status === 'PENDING').length;
-    const approvedNotIssued = requests.filter((item) => item.status === 'APPROVED').length;
+  const mainStats = useMemo(() => {
+    const materialPending = requests.filter((item) => item.status === 'PENDING').length;
+    const materialApprovedNotIssued = requests.filter((item) => item.status === 'APPROVED').length;
     const pendingReturns = returns.filter((item) => item.status === 'PENDING').length;
+    const unclosedReturns = returns.filter((item) => item.status === 'APPROVED' || item.status === 'PENDING').length;
     const overdueCustody = custody.filter((item) => item.status === 'OVERDUE' || daysLate(item.dueDate) > 0).length;
     const lowStock = inventory.filter((item) => item.status === 'LOW_STOCK').length;
-    const criticalAlerts = notifications.filter(
-      (item) => item.severity === 'critical' || item.kind === 'alert'
-    ).length;
-    const maintenancePending = suggestions.filter((item) => item.category === 'MAINTENANCE' && (item.status === 'PENDING' || item.status === 'UNDER_REVIEW')).length;
-    const cleaningPending = suggestions.filter((item) => item.category === 'CLEANING' && (item.status === 'PENDING' || item.status === 'UNDER_REVIEW')).length;
-    const purchasePending = suggestions.filter((item) => item.category === 'PURCHASE' && (item.status === 'PENDING' || item.status === 'UNDER_REVIEW')).length;
-    const otherPending = suggestions.filter((item) => item.category === 'OTHER' && (item.status === 'PENDING' || item.status === 'UNDER_REVIEW')).length;
-    const todayOps = auditLogs.filter((item) => {
-      const created = new Date(item.createdAt);
-      const today = new Date();
-      return (
-        created.getFullYear() === today.getFullYear() &&
-        created.getMonth() === today.getMonth() &&
-        created.getDate() === today.getDate()
-      );
-    }).length;
+    const outOfStock = inventory.filter((item) => item.status === 'OUT_OF_STOCK').length;
 
     return {
-      pendingRequests,
-      approvedNotIssued,
+      materialPending,
+      materialApprovedNotIssued,
       pendingReturns,
+      unclosedReturns,
       overdueCustody,
       lowStock,
-      criticalAlerts,
-      maintenancePending,
-      cleaningPending,
-      purchasePending,
-      otherPending,
-      todayOps,
+      outOfStock,
     };
-  }, [requests, returns, custody, inventory, notifications, suggestions, auditLogs]);
+  }, [requests, returns, custody, inventory]);
+
+  const serviceStats = useMemo(() => {
+    const openStatuses = ['PENDING', 'UNDER_REVIEW', 'APPROVED'];
+
+    return {
+      maintenanceOpen: suggestions.filter(
+        (item) => item.category === 'MAINTENANCE' && openStatuses.includes(item.status)
+      ).length,
+      cleaningOpen: suggestions.filter(
+        (item) => item.category === 'CLEANING' && openStatuses.includes(item.status)
+      ).length,
+      purchaseOpen: suggestions.filter(
+        (item) => item.category === 'PURCHASE' && openStatuses.includes(item.status)
+      ).length,
+      otherOpen: suggestions.filter(
+        (item) => item.category === 'OTHER' && openStatuses.includes(item.status)
+      ).length,
+    };
+  }, [suggestions]);
+
+  const topSummary = useMemo(() => {
+    const criticalActions =
+      Number(mainStats.materialPending > 0) +
+      Number(mainStats.pendingReturns > 0) +
+      Number(mainStats.overdueCustody > 0) +
+      Number(mainStats.outOfStock > 0) +
+      Number(serviceStats.maintenanceOpen > 0) +
+      Number(serviceStats.purchaseOpen > 0);
+
+    return {
+      criticalActions,
+      todayOps: auditLogs.filter((item) => {
+        const created = new Date(item.createdAt);
+        const today = new Date();
+        return (
+          created.getFullYear() === today.getFullYear() &&
+          created.getMonth() === today.getMonth() &&
+          created.getDate() === today.getDate()
+        );
+      }).length,
+      criticalAlerts: notifications.filter(
+        (item) => item.severity === 'critical' || item.kind === 'alert'
+      ).length,
+    };
+  }, [auditLogs, notifications, mainStats, serviceStats]);
 
   const decisionRows = useMemo<FocusRow[]>(() => {
     const rows: FocusRow[] = [];
 
-    if (stats.maintenancePending > 0) {
+    if (mainStats.materialPending > 0) {
       rows.push({
-        id: 'dr-m',
-        title: 'طلبات صيانة جديدة',
-        note: `${stats.maintenancePending} طلبًا بانتظار الاطلاع أو التوجيه`,
-        href: '/maintenance',
-        level: 'critical',
-      });
-    }
-
-    if (stats.cleaningPending > 0) {
-      rows.push({
-        id: 'dr-c',
-        title: 'طلبات نظافة جديدة',
-        note: `${stats.cleaningPending} طلبًا يحتاج متابعة تشغيلية`,
-        href: '/cleaning',
-        level: 'warning',
-      });
-    }
-
-    if (stats.purchasePending > 0) {
-      rows.push({
-        id: 'dr-p',
-        title: 'طلبات شراء مباشر',
-        note: `${stats.purchasePending} طلبًا بانتظار القرار`,
-        href: '/purchases',
-        level: 'warning',
-      });
-    }
-
-    if (stats.otherPending > 0) {
-      rows.push({
-        id: 'dr-o',
-        title: 'طلبات أخرى بانتظار التوجيه',
-        note: `${stats.otherPending} طلبًا يحتاج تحديد الجهة المناسبة`,
-        href: '/suggestions?category=OTHER',
-        level: 'primary',
-      });
-    }
-
-    if (stats.pendingRequests > 0) {
-      rows.push({
-        id: 'dr-1',
-        title: 'تراكم في الطلبات الجديدة',
-        note: `${stats.pendingRequests} طلبًا بانتظار المعالجة الأولية`,
+        id: 'mgr-main-1',
+        title: 'طلبات مواد جديدة تحتاج التوجيه',
+        note: `${mainStats.materialPending} طلبًا جديدًا بانتظار المعالجة`,
         href: '/requests',
         level: 'critical',
       });
     }
 
-    if (stats.approvedNotIssued > 0) {
+    if (mainStats.materialApprovedNotIssued > 0) {
       rows.push({
-        id: 'dr-2',
-        title: 'طلبات معتمدة لم تُنفذ بعد',
-        note: `${stats.approvedNotIssued} طلبًا جاهزًا للصرف ولم يغلق بعد`,
+        id: 'mgr-main-2',
+        title: 'طلبات مواد معتمدة لم تُصرف بعد',
+        note: `${mainStats.materialApprovedNotIssued} طلبًا معتمدًا يحتاج متابعة تنفيذ`,
         href: '/requests',
         level: 'warning',
       });
     }
 
-    if (stats.pendingReturns > 0) {
+    if (mainStats.pendingReturns > 0) {
       rows.push({
-        id: 'dr-3',
-        title: 'إرجاعات معلقة',
-        note: `${stats.pendingReturns} حالة تحتاج استلامًا وتوثيقًا`,
+        id: 'mgr-main-3',
+        title: 'إرجاعات بانتظار الاستلام',
+        note: `${mainStats.pendingReturns} حالة لم تستلم بعد`,
         href: '/returns',
         level: 'warning',
       });
     }
 
-    if (stats.overdueCustody > 0) {
+    if (mainStats.overdueCustody > 0) {
       rows.push({
-        id: 'dr-4',
-        title: 'عهد متأخرة',
-        note: `${stats.overdueCustody} عهدة تحتاج متابعة إدارية`,
+        id: 'mgr-main-4',
+        title: 'عهد متأخرة تحتاج متابعة إدارية',
+        note: `${mainStats.overdueCustody} عهدة تجاوزت المدة`,
         href: '/custody',
         level: 'critical',
       });
     }
 
-    if (stats.lowStock > 0) {
+    if (mainStats.outOfStock > 0) {
       rows.push({
-        id: 'dr-5',
-        title: 'مواد منخفضة المخزون',
-        note: `${stats.lowStock} صنفًا يحتاج قرار دعم أو إحلال`,
+        id: 'mgr-main-5',
+        title: 'مواد نافدة تؤثر على التلبية',
+        note: `${mainStats.outOfStock} صنفًا غير متاح حاليًا`,
         href: '/inventory',
+        level: 'critical',
+      });
+    }
+
+    if (serviceStats.maintenanceOpen > 0) {
+      rows.push({
+        id: 'mgr-svc-1',
+        title: 'طلبات صيانة بانتظار التوجيه',
+        note: `${serviceStats.maintenanceOpen} طلب صيانة مفتوح`,
+        href: '/maintenance',
         level: 'warning',
       });
     }
 
-    if (stats.criticalAlerts > 0) {
+    if (serviceStats.purchaseOpen > 0) {
       rows.push({
-        id: 'dr-6',
+        id: 'mgr-svc-2',
+        title: 'طلبات شراء مباشر بانتظار القرار',
+        note: `${serviceStats.purchaseOpen} طلب شراء يحتاج متابعة`,
+        href: '/purchases',
+        level: 'warning',
+      });
+    }
+
+    if (serviceStats.otherOpen > 0) {
+      rows.push({
+        id: 'mgr-svc-3',
+        title: 'طلبات أخرى تحتاج تحديد جهة',
+        note: `${serviceStats.otherOpen} طلبًا ما زال مفتوحًا`,
+        href: '/suggestions?category=OTHER',
+        level: 'normal',
+      });
+    }
+
+    if (topSummary.criticalAlerts > 0) {
+      rows.push({
+        id: 'mgr-alerts',
         title: 'تنبيهات حرجة نشطة',
-        note: `${stats.criticalAlerts} تنبيهًا يستحق مراجعة مباشرة`,
+        note: `${topSummary.criticalAlerts} تنبيهًا يحتاج مراجعة`,
         href: '/notifications',
         level: 'critical',
       });
     }
 
     return rows.slice(0, 8);
-  }, [stats]);
+  }, [mainStats, serviceStats, topSummary]);
 
   const auditPreview = useMemo(() => {
-    return auditLogs.slice(0, 6).map((item) => ({
+    return auditLogs.slice(0, 5).map((item) => ({
       id: item.id,
       title: item.action || 'إجراء مسجل',
       note: `${item.user?.fullName || 'غير معروف'} — ${formatRelative(item.createdAt)}`,
@@ -823,22 +839,13 @@ function ManagerDashboard({ fullName }: { fullName?: string }) {
     }));
   }, [auditLogs]);
 
-  const quickLinks = [
-    { title: 'الصيانة', href: '/maintenance', icon: 'maintenance' as const, note: `${stats.maintenancePending} مفتوحة` },
-    { title: 'النظافة', href: '/cleaning', icon: 'cleaning' as const, note: `${stats.cleaningPending} مفتوحة` },
-    { title: 'الشراء المباشر', href: '/purchases', icon: 'purchase' as const, note: `${stats.purchasePending} مفتوحة` },
-    { title: 'طلبات أخرى', href: '/suggestions?category=OTHER', icon: 'other' as const, note: `${stats.otherPending} مفتوحة` },
-    { title: 'سجل التدقيق', href: '/audit-logs', icon: 'audit' as const, note: 'رقابة وتتبّع' },
-    { title: 'المستخدمون', href: '/users', icon: 'users' as const, note: 'الأدوار والصلاحيات' },
-  ];
-
   return (
     <div className="space-y-4 sm:space-y-6">
       <section className="relative overflow-hidden rounded-[24px] border border-[#d8e4e2] bg-[linear-gradient(135deg,#016564_0%,#0c706e_55%,#114f4f_100%)] p-4 text-white shadow-[0_18px_50px_rgba(1,101,100,0.18)] sm:rounded-[32px] sm:p-6">
         <div className="absolute -left-10 top-0 h-36 w-36 rounded-full bg-[#d0b284]/10 blur-2xl" />
         <div className="absolute bottom-0 right-0 h-44 w-44 rounded-full bg-white/5 blur-2xl" />
 
-        <div className="relative grid gap-4 xl:grid-cols-[1.25fr_0.95fr] sm:gap-5">
+        <div className="relative grid gap-4 xl:grid-cols-[1.15fr_0.85fr] sm:gap-5">
           <div>
             <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-2 text-[12px]">
               <Icon name="dashboard" className="h-4 w-4" />
@@ -849,16 +856,16 @@ function ManagerDashboard({ fullName }: { fullName?: string }) {
               {fullName ? `مرحبًا ${fullName}` : 'مرحبًا بك'}
             </h1>
             <p className="mt-3 max-w-[760px] text-[13px] leading-7 text-white/85 sm:text-[14px] sm:leading-8">
-              لوحة قرار ورقابة: أين التعثر، أين التراكم، وما الذي يحتاج تدخلًا إداريًا الآن.
+              لوحة قرار ذكية مبنية على صلب المنصة: طلبات المواد، الإرجاعات، العهد، والمخزون، مع إبراز المسارات الخدمية المساندة دون أن تطغى على الأصل.
             </p>
           </div>
 
           <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
             {[
-              { label: 'طلبات الصيانة', value: stats.maintenancePending, icon: 'maintenance' as const },
-              { label: 'طلبات النظافة', value: stats.cleaningPending, icon: 'cleaning' as const },
-              { label: 'الشراء المباشر', value: stats.purchasePending, icon: 'purchase' as const },
-              { label: 'طلبات أخرى', value: stats.otherPending, icon: 'other' as const },
+              { label: 'طلبات مواد جديدة', value: mainStats.materialPending, icon: 'requests' as const },
+              { label: 'طلبات بانتظار الصرف', value: mainStats.materialApprovedNotIssued, icon: 'trend' as const },
+              { label: 'إرجاعات بانتظار الاستلام', value: mainStats.pendingReturns, icon: 'returns' as const },
+              { label: 'عناصر تحتاج قرارًا الآن', value: topSummary.criticalActions, icon: 'warning' as const },
             ].map((item) => (
               <div
                 key={item.label}
@@ -882,52 +889,52 @@ function ManagerDashboard({ fullName }: { fullName?: string }) {
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 sm:gap-4">
         {[
           {
-            title: 'طلبات الصيانة المفتوحة',
-            value: stats.maintenancePending,
-            note: 'تحتاج اعتمادًا أو توجيهًا',
-            href: '/maintenance',
-            icon: 'maintenance' as const,
-            level: stats.maintenancePending > 0 ? 'critical' : 'normal',
+            title: 'طلبات المواد الجديدة',
+            value: mainStats.materialPending,
+            note: 'طلبات تنتظر المعالجة الأولية',
+            href: '/requests',
+            icon: 'requests' as const,
+            level: mainStats.materialPending > 0 ? 'critical' : 'normal',
           },
           {
-            title: 'طلبات النظافة المفتوحة',
-            value: stats.cleaningPending,
-            note: 'تحتاج متابعة تشغيلية',
-            href: '/cleaning',
-            icon: 'cleaning' as const,
-            level: stats.cleaningPending > 0 ? 'warning' : 'normal',
+            title: 'طلبات بانتظار الصرف',
+            value: mainStats.materialApprovedNotIssued,
+            note: 'طلبات معتمدة لم تُنفذ بعد',
+            href: '/requests',
+            icon: 'trend' as const,
+            level: mainStats.materialApprovedNotIssued > 0 ? 'warning' : 'normal',
           },
           {
-            title: 'طلبات الشراء المباشر',
-            value: stats.purchasePending,
-            note: 'طلبات بانتظار القرار المالي',
-            href: '/purchases',
-            icon: 'purchase' as const,
-            level: stats.purchasePending > 0 ? 'warning' : 'normal',
+            title: 'الإرجاعات بانتظار الاستلام',
+            value: mainStats.pendingReturns,
+            note: 'حالات لم تستلم بعد',
+            href: '/returns',
+            icon: 'returns' as const,
+            level: mainStats.pendingReturns > 0 ? 'warning' : 'normal',
           },
           {
-            title: 'الطلبات الأخرى',
-            value: stats.otherPending,
-            note: 'طلبات تحتاج تحديد الجهة المختصة',
-            href: '/suggestions?category=OTHER',
-            icon: 'other' as const,
-            level: stats.otherPending > 0 ? 'primary' : 'normal',
+            title: 'إرجاعات غير مغلقة',
+            value: mainStats.unclosedReturns,
+            note: 'تحتاج استكمال الإغلاق والمتابعة',
+            href: '/returns',
+            icon: 'audit' as const,
+            level: mainStats.unclosedReturns > 0 ? 'warning' : 'normal',
           },
           {
             title: 'العهد المتأخرة',
-            value: stats.overdueCustody,
-            note: 'عهد تستحق متابعة إدارية',
+            value: mainStats.overdueCustody,
+            note: 'عهد تتطلب متابعة إدارية',
             href: '/custody',
             icon: 'custody' as const,
-            level: stats.overdueCustody > 0 ? 'critical' : 'normal',
+            level: mainStats.overdueCustody > 0 ? 'critical' : 'normal',
           },
           {
-            title: 'العمليات المنفذة اليوم',
-            value: stats.todayOps,
-            note: 'نبض التنفيذ اليومي المسجل',
-            href: '/audit-logs',
-            icon: 'audit' as const,
-            level: 'normal',
+            title: 'المخزون الحرج',
+            value: mainStats.lowStock + mainStats.outOfStock,
+            note: `${mainStats.lowStock} منخفضة و${mainStats.outOfStock} نافدة`,
+            href: '/inventory',
+            icon: 'inventory' as const,
+            level: mainStats.outOfStock > 0 || mainStats.lowStock > 0 ? 'warning' : 'normal',
           },
         ].map((card) => {
           const tone = levelClasses(card.level);
@@ -952,18 +959,18 @@ function ManagerDashboard({ fullName }: { fullName?: string }) {
         })}
       </section>
 
-      <section className="grid gap-3 xl:grid-cols-[1.15fr_0.85fr] sm:gap-4">
+      <section className="grid gap-3 xl:grid-cols-[1.1fr_0.9fr] sm:gap-4">
         <Card className="rounded-[22px] border border-[#dde8e6] bg-white p-4 shadow-soft sm:rounded-[28px] sm:p-5">
           <SectionTitle
-            title="أين القرار الآن"
-            note="العناصر التي تعطي المدير صورة واضحة عن موضع التدخل."
-            href="/maintenance"
+            title="ما الذي يحتاج قراري الآن؟"
+            note="أهم العناصر التي تستدعي تدخلًا إداريًا مباشرًا."
+            href="/requests"
             action="فتح التشغيل"
           />
 
           {decisionRows.length === 0 ? (
             <div className="rounded-[20px] border border-dashed border-[#d8e4e2] p-6 text-center text-slate-500 sm:rounded-[22px] sm:p-10">
-              لا توجد مؤشرات حرجة حالية
+              لا توجد عناصر حرجة حالية
             </div>
           ) : (
             <div className="space-y-3">
@@ -986,68 +993,159 @@ function ManagerDashboard({ fullName }: { fullName?: string }) {
           )}
         </Card>
 
-        <div className="grid gap-3 sm:gap-4">
-          <Card className="rounded-[22px] border border-[#dde8e6] bg-white p-4 shadow-soft sm:rounded-[28px] sm:p-5">
-            <SectionTitle title="اختصارات المدير" note="أهم المسارات لاتخاذ القرار والمتابعة." />
+        <Card className="rounded-[22px] border border-[#dde8e6] bg-white p-4 shadow-soft sm:rounded-[28px] sm:p-5">
+          <SectionTitle
+            title="الخدمات التشغيلية المساندة"
+            note="طلبات مهمة تؤثر على البيئة التدريبية وتحتاج متابعة سريعة."
+          />
 
-            <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
-              {quickLinks.map((item) => (
+          <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
+            {[
+              {
+                title: 'طلبات الصيانة المفتوحة',
+                value: serviceStats.maintenanceOpen,
+                note: 'تحتاج اعتمادًا أو توجيهًا',
+                href: '/maintenance',
+                icon: 'maintenance' as const,
+                level: serviceStats.maintenanceOpen > 0 ? 'warning' : 'normal',
+              },
+              {
+                title: 'طلبات النظافة المفتوحة',
+                value: serviceStats.cleaningOpen,
+                note: 'تحتاج متابعة تشغيلية',
+                href: '/cleaning',
+                icon: 'cleaning' as const,
+                level: serviceStats.cleaningOpen > 0 ? 'normal' : 'normal',
+              },
+              {
+                title: 'طلبات الشراء المباشر',
+                value: serviceStats.purchaseOpen,
+                note: 'طلبات بانتظار القرار المالي',
+                href: '/purchases',
+                icon: 'purchase' as const,
+                level: serviceStats.purchaseOpen > 0 ? 'warning' : 'normal',
+              },
+              {
+                title: 'الطلبات الأخرى',
+                value: serviceStats.otherOpen,
+                note: 'طلبات تحتاج تحديد الجهة المختصة',
+                href: '/suggestions?category=OTHER',
+                icon: 'other' as const,
+                level: serviceStats.otherOpen > 0 ? 'normal' : 'normal',
+              },
+            ].map((card) => {
+              const tone = levelClasses(card.level);
+
+              return (
                 <Link
-                  key={item.title}
-                  href={item.href}
-                  className="group rounded-[20px] border border-[#e0ebe9] bg-[#fbfdfd] p-3.5 transition hover:border-[#c6dad7] hover:bg-white hover:shadow-md sm:rounded-[22px] sm:p-4"
+                  key={card.title}
+                  href={card.href}
+                  className={`group rounded-[20px] border p-4 transition hover:-translate-y-[2px] hover:shadow-md sm:rounded-[22px] sm:p-5 ${tone.border} ${tone.surface}`}
                 >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="rounded-[18px] bg-[#016564]/8 p-2.5 text-[#016564] sm:p-3">
-                      <Icon name={item.icon} className="h-5 w-5" />
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <div className="text-[13px] leading-6 text-slate-600">{card.title}</div>
+                      <div className="mt-3 text-[28px] leading-none text-slate-900 sm:text-[32px]">{card.value}</div>
+                      <div className="mt-2 text-[12px] leading-6 text-slate-600">{card.note}</div>
                     </div>
-                    <Icon name="arrow" className="h-4 w-4 text-slate-400 transition group-hover:text-[#016564]" />
+
+                    <div className={`rounded-[18px] p-2.5 sm:rounded-[20px] sm:p-3 ${tone.badge}`}>
+                      <Icon name={card.icon} className="h-6 w-6" />
+                    </div>
                   </div>
-
-                  <div className="mt-3 text-[14px] text-slate-900 sm:mt-4 sm:text-[15px]">{item.title}</div>
-                  <div className="mt-1 text-[12px] leading-6 text-slate-500">{item.note}</div>
                 </Link>
-              ))}
+              );
+            })}
+          </div>
+        </Card>
+      </section>
+
+      <section className="grid gap-3 xl:grid-cols-[1.1fr_0.9fr] sm:gap-4">
+        <Card className="rounded-[22px] border border-[#dde8e6] bg-white p-4 shadow-soft sm:rounded-[28px] sm:p-5">
+          <SectionTitle
+            title="آخر ما سُجل رقابيًا"
+            note="معاينة سريعة لأحدث السجلات المؤثرة في التشغيل."
+            href="/audit-logs"
+            action="سجل التدقيق"
+          />
+
+          {auditPreview.length === 0 ? (
+            <div className="rounded-[20px] border border-dashed border-[#d8e4e2] p-6 text-center text-slate-500 sm:rounded-[22px] sm:p-8">
+              لا توجد سجلات حديثة
             </div>
-          </Card>
+          ) : (
+            <div className="space-y-3">
+              {auditPreview.map((item) => {
+                const tone = levelClasses(item.level);
 
-          <Card className="rounded-[22px] border border-[#dde8e6] bg-white p-4 shadow-soft sm:rounded-[28px] sm:p-5">
-            <SectionTitle
-              title="آخر ما سُجل رقابيًا"
-              note="معاينة سريعة لأحدث السجلات ذات الأثر."
-              href="/audit-logs"
-              action="سجل التدقيق"
-            />
-
-            {auditPreview.length === 0 ? (
-              <div className="rounded-[20px] border border-dashed border-[#d8e4e2] p-6 text-center text-slate-500 sm:rounded-[22px] sm:p-8">
-                لا توجد سجلات حديثة
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {auditPreview.map((item) => {
-                  const tone = levelClasses(item.level);
-
-                  return (
-                    <Link
-                      key={item.id}
-                      href={item.href}
-                      className={`block rounded-[20px] border p-3.5 transition hover:shadow-md sm:p-4 ${tone.border} ${tone.surface}`}
-                    >
-                      <div className="flex items-start gap-3">
-                        <span className={`mt-2 h-2.5 w-2.5 rounded-full ${tone.dot}`} />
-                        <div className="min-w-0 flex-1">
-                          <div className="text-[14px] text-slate-900">{item.title}</div>
-                          <div className="mt-1 text-[12px] leading-6 text-slate-600">{item.note}</div>
-                        </div>
+                return (
+                  <Link
+                    key={item.id}
+                    href={item.href}
+                    className={`block rounded-[20px] border p-3.5 transition hover:shadow-md sm:p-4 ${tone.border} ${tone.surface}`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <span className={`mt-2 h-2.5 w-2.5 rounded-full ${tone.dot}`} />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[14px] text-slate-900">{item.title}</div>
+                        <div className="mt-1 text-[12px] leading-6 text-slate-600">{item.note}</div>
                       </div>
-                    </Link>
-                  );
-                })}
-              </div>
-            )}
-          </Card>
-        </div>
+                    </div>
+                  </Link>
+                );
+              })}
+            </div>
+          )}
+        </Card>
+
+        <Card className="rounded-[22px] border border-[#dde8e6] bg-white p-4 shadow-soft sm:rounded-[28px] sm:p-5">
+          <SectionTitle
+            title="الإشعارات والتنبيهات"
+            note="ما يستحق الانتباه الفوري دون فتح الأقسام كاملة."
+            href="/notifications"
+            action="كل الإشعارات"
+          />
+
+          <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
+            {[
+              {
+                title: 'تنبيهات حرجة',
+                value: topSummary.criticalAlerts,
+                note: 'تنبيهات تشغيلية أو رقابية',
+                icon: 'warning' as const,
+                level: topSummary.criticalAlerts > 0 ? 'critical' : 'normal',
+              },
+              {
+                title: 'عمليات اليوم',
+                value: topSummary.todayOps,
+                note: 'حركة التنفيذ المسجلة اليوم',
+                icon: 'audit' as const,
+                level: 'normal',
+              },
+            ].map((card) => {
+              const tone = levelClasses(card.level);
+
+              return (
+                <div
+                  key={card.title}
+                  className={`rounded-[20px] border p-4 sm:rounded-[22px] sm:p-5 ${tone.border} ${tone.surface}`}
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <div className="text-[13px] leading-6 text-slate-600">{card.title}</div>
+                      <div className="mt-3 text-[28px] leading-none text-slate-900 sm:text-[32px]">{card.value}</div>
+                      <div className="mt-2 text-[12px] leading-6 text-slate-600">{card.note}</div>
+                    </div>
+
+                    <div className={`rounded-[18px] p-2.5 sm:rounded-[20px] sm:p-3 ${tone.badge}`}>
+                      <Icon name={card.icon} className="h-6 w-6" />
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
       </section>
     </div>
   );
