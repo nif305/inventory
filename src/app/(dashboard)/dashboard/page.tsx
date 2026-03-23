@@ -1,3 +1,4 @@
+
 'use client';
 
 import React, { useEffect, useMemo, useState } from 'react';
@@ -632,26 +633,30 @@ function ManagerDashboard({ fullName }: { fullName?: string }) {
   const [returns, setReturns] = useState<ReturnRequest[]>([]);
   const [custody, setCustody] = useState<CustodyItem[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [suggestions, setSuggestions] = useState<SuggestionItem[]>([]);
   const [auditLogs, setAuditLogs] = useState<Array<{ id: string; action: string; entity: string; entityId?: string | null; createdAt: string; user?: { fullName?: string; role?: string | null } | null }>>([]);
 
   useEffect(() => {
     let mounted = true;
 
     const load = async () => {
-      const [requestsRes, inventoryRes, auditRes] = await Promise.all([
+      const [requestsRes, inventoryRes, suggestionsRes, auditRes] = await Promise.all([
         fetch('/api/requests', { cache: 'no-store' }),
         fetch('/api/inventory?limit=200', { cache: 'no-store' }),
+        fetch('/api/suggestions', { cache: 'no-store' }).catch(() => null),
         fetch('/api/audit-logs?limit=20', { cache: 'no-store' }).catch(() => null),
       ]);
 
       const requestsJson = await requestsRes.json().catch(() => null);
       const inventoryJson = await inventoryRes.json().catch(() => null);
+      const suggestionsJson = suggestionsRes ? await suggestionsRes.json().catch(() => null) : null;
       const auditJson = auditRes ? await auditRes.json().catch(() => null) : null;
 
       if (!mounted) return;
 
       setRequests(Array.isArray(requestsJson?.data) ? requestsJson.data : []);
       setInventory(Array.isArray(inventoryJson?.data) ? inventoryJson.data : []);
+      setSuggestions(Array.isArray(suggestionsJson?.data) ? suggestionsJson.data : []);
       setReturns(loadLocal<ReturnRequest>(RETURNS_STORAGE_KEY));
       setCustody(loadLocal<CustodyItem>(CUSTODY_STORAGE_KEY));
       setNotifications(loadLocal<NotificationItem>(NOTIFICATIONS_STORAGE_KEY));
@@ -673,6 +678,10 @@ function ManagerDashboard({ fullName }: { fullName?: string }) {
     const criticalAlerts = notifications.filter(
       (item) => item.severity === 'critical' || item.kind === 'alert'
     ).length;
+    const maintenancePending = suggestions.filter((item) => item.category === 'MAINTENANCE' && (item.status === 'PENDING' || item.status === 'UNDER_REVIEW')).length;
+    const cleaningPending = suggestions.filter((item) => item.category === 'CLEANING' && (item.status === 'PENDING' || item.status === 'UNDER_REVIEW')).length;
+    const purchasePending = suggestions.filter((item) => item.category === 'PURCHASE' && (item.status === 'PENDING' || item.status === 'UNDER_REVIEW')).length;
+    const otherPending = suggestions.filter((item) => item.category === 'OTHER' && (item.status === 'PENDING' || item.status === 'UNDER_REVIEW')).length;
     const todayOps = auditLogs.filter((item) => {
       const created = new Date(item.createdAt);
       const today = new Date();
@@ -690,12 +699,56 @@ function ManagerDashboard({ fullName }: { fullName?: string }) {
       overdueCustody,
       lowStock,
       criticalAlerts,
+      maintenancePending,
+      cleaningPending,
+      purchasePending,
+      otherPending,
       todayOps,
     };
-  }, [requests, returns, custody, inventory, notifications, auditLogs]);
+  }, [requests, returns, custody, inventory, notifications, suggestions, auditLogs]);
 
   const decisionRows = useMemo<FocusRow[]>(() => {
     const rows: FocusRow[] = [];
+
+    if (stats.maintenancePending > 0) {
+      rows.push({
+        id: 'dr-m',
+        title: 'طلبات صيانة جديدة',
+        note: `${stats.maintenancePending} طلبًا بانتظار الاطلاع أو التوجيه`,
+        href: '/maintenance',
+        level: 'critical',
+      });
+    }
+
+    if (stats.cleaningPending > 0) {
+      rows.push({
+        id: 'dr-c',
+        title: 'طلبات نظافة جديدة',
+        note: `${stats.cleaningPending} طلبًا يحتاج متابعة تشغيلية`,
+        href: '/cleaning',
+        level: 'warning',
+      });
+    }
+
+    if (stats.purchasePending > 0) {
+      rows.push({
+        id: 'dr-p',
+        title: 'طلبات شراء مباشر',
+        note: `${stats.purchasePending} طلبًا بانتظار القرار`,
+        href: '/purchases',
+        level: 'warning',
+      });
+    }
+
+    if (stats.otherPending > 0) {
+      rows.push({
+        id: 'dr-o',
+        title: 'طلبات أخرى بانتظار التوجيه',
+        note: `${stats.otherPending} طلبًا يحتاج تحديد الجهة المناسبة`,
+        href: '/suggestions?category=OTHER',
+        level: 'primary',
+      });
+    }
 
     if (stats.pendingRequests > 0) {
       rows.push({
@@ -757,7 +810,7 @@ function ManagerDashboard({ fullName }: { fullName?: string }) {
       });
     }
 
-    return rows.slice(0, 6);
+    return rows.slice(0, 8);
   }, [stats]);
 
   const auditPreview = useMemo(() => {
@@ -771,10 +824,10 @@ function ManagerDashboard({ fullName }: { fullName?: string }) {
   }, [auditLogs]);
 
   const quickLinks = [
-    { title: 'الطلبات', href: '/requests', icon: 'requests' as const, note: 'تشغيل ومتابعة' },
-    { title: 'الإرجاعات', href: '/returns', icon: 'returns' as const, note: 'مراجعة وإقفال' },
-    { title: 'العهد', href: '/custody', icon: 'custody' as const, note: 'متابعة الالتزام' },
-    { title: 'المخزون', href: '/inventory', icon: 'inventory' as const, note: 'التوفر والحركة' },
+    { title: 'الصيانة', href: '/maintenance', icon: 'maintenance' as const, note: `${stats.maintenancePending} مفتوحة` },
+    { title: 'النظافة', href: '/cleaning', icon: 'cleaning' as const, note: `${stats.cleaningPending} مفتوحة` },
+    { title: 'الشراء المباشر', href: '/purchases', icon: 'purchase' as const, note: `${stats.purchasePending} مفتوحة` },
+    { title: 'طلبات أخرى', href: '/suggestions?category=OTHER', icon: 'other' as const, note: `${stats.otherPending} مفتوحة` },
     { title: 'سجل التدقيق', href: '/audit-logs', icon: 'audit' as const, note: 'رقابة وتتبّع' },
     { title: 'المستخدمون', href: '/users', icon: 'users' as const, note: 'الأدوار والصلاحيات' },
   ];
@@ -802,10 +855,10 @@ function ManagerDashboard({ fullName }: { fullName?: string }) {
 
           <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
             {[
-              { label: 'طلبات معلقة', value: stats.pendingRequests, icon: 'requests' as const },
-              { label: 'غير منفذ بعد الاعتماد', value: stats.approvedNotIssued, icon: 'trend' as const },
-              { label: 'إرجاعات معلقة', value: stats.pendingReturns, icon: 'returns' as const },
-              { label: 'تنبيهات حرجة', value: stats.criticalAlerts, icon: 'warning' as const },
+              { label: 'طلبات الصيانة', value: stats.maintenancePending, icon: 'maintenance' as const },
+              { label: 'طلبات النظافة', value: stats.cleaningPending, icon: 'cleaning' as const },
+              { label: 'الشراء المباشر', value: stats.purchasePending, icon: 'purchase' as const },
+              { label: 'طلبات أخرى', value: stats.otherPending, icon: 'other' as const },
             ].map((item) => (
               <div
                 key={item.label}
@@ -829,28 +882,36 @@ function ManagerDashboard({ fullName }: { fullName?: string }) {
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 sm:gap-4">
         {[
           {
-            title: 'الطلبات المعلقة',
-            value: stats.pendingRequests,
-            note: 'طلبات ما زالت تنتظر المعالجة',
-            href: '/requests',
-            icon: 'requests' as const,
-            level: stats.pendingRequests > 0 ? 'critical' : 'normal',
+            title: 'طلبات الصيانة المفتوحة',
+            value: stats.maintenancePending,
+            note: 'تحتاج اعتمادًا أو توجيهًا',
+            href: '/maintenance',
+            icon: 'maintenance' as const,
+            level: stats.maintenancePending > 0 ? 'critical' : 'normal',
           },
           {
-            title: 'طلبات معتمدة غير منفذة',
-            value: stats.approvedNotIssued,
-            note: 'اعتمدت ولم تصل إلى التنفيذ بعد',
-            href: '/requests',
-            icon: 'trend' as const,
-            level: stats.approvedNotIssued > 0 ? 'warning' : 'normal',
+            title: 'طلبات النظافة المفتوحة',
+            value: stats.cleaningPending,
+            note: 'تحتاج متابعة تشغيلية',
+            href: '/cleaning',
+            icon: 'cleaning' as const,
+            level: stats.cleaningPending > 0 ? 'warning' : 'normal',
           },
           {
-            title: 'الإرجاعات المعلقة',
-            value: stats.pendingReturns,
-            note: 'إرجاعات لم تُغلق بعد',
-            href: '/returns',
-            icon: 'returns' as const,
-            level: stats.pendingReturns > 0 ? 'warning' : 'normal',
+            title: 'طلبات الشراء المباشر',
+            value: stats.purchasePending,
+            note: 'طلبات بانتظار القرار المالي',
+            href: '/purchases',
+            icon: 'purchase' as const,
+            level: stats.purchasePending > 0 ? 'warning' : 'normal',
+          },
+          {
+            title: 'الطلبات الأخرى',
+            value: stats.otherPending,
+            note: 'طلبات تحتاج تحديد الجهة المختصة',
+            href: '/suggestions?category=OTHER',
+            icon: 'other' as const,
+            level: stats.otherPending > 0 ? 'primary' : 'normal',
           },
           {
             title: 'العهد المتأخرة',
@@ -859,14 +920,6 @@ function ManagerDashboard({ fullName }: { fullName?: string }) {
             href: '/custody',
             icon: 'custody' as const,
             level: stats.overdueCustody > 0 ? 'critical' : 'normal',
-          },
-          {
-            title: 'مواد منخفضة المخزون',
-            value: stats.lowStock,
-            note: 'تحتاج قرار دعم أو إعادة توزيع',
-            href: '/inventory',
-            icon: 'inventory' as const,
-            level: stats.lowStock > 0 ? 'warning' : 'normal',
           },
           {
             title: 'العمليات المنفذة اليوم',
@@ -904,7 +957,7 @@ function ManagerDashboard({ fullName }: { fullName?: string }) {
           <SectionTitle
             title="أين القرار الآن"
             note="العناصر التي تعطي المدير صورة واضحة عن موضع التدخل."
-            href="/requests"
+            href="/maintenance"
             action="فتح التشغيل"
           />
 
