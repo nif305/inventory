@@ -253,6 +253,26 @@ export default function SuggestionsPage() {
     setForm((prev) => ({ ...prev, [key]: value }));
   }
 
+  async function fileToAttachmentPayload(file: File) {
+    const base64Content = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = String(reader.result || '');
+        const commaIndex = result.indexOf(',');
+        resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result);
+      };
+      reader.onerror = () => reject(new Error(`تعذر قراءة الملف: ${file.name}`));
+      reader.readAsDataURL(file);
+    });
+
+    return {
+      filename: file.name,
+      contentType: file.type || 'application/octet-stream',
+      base64Content,
+    };
+  }
+
+
   function resetCreateState() {
     setForm(DEFAULT_FORM);
     setAttachments([]);
@@ -349,6 +369,10 @@ export default function SuggestionsPage() {
 
     setSubmitting(true);
     try {
+      const attachmentPayload = await Promise.all(
+        attachments.map((file) => fileToAttachmentPayload(file))
+      );
+
       const res = await fetch('/api/suggestions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -361,6 +385,10 @@ export default function SuggestionsPage() {
           quantity: quantityValue,
           location,
           externalRecipient,
+          requestSource: form.scope,
+          programName: form.programName.trim(),
+          area: areaName,
+          attachments: attachmentPayload,
         }),
       });
 
