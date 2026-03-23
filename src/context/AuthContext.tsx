@@ -170,24 +170,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let isMounted = true;
 
     const bootstrapAuth = async () => {
-      const storedUser = loadStoredUser(AUTH_STORAGE_KEY);
-      const storedOriginalUser = loadStoredUser(AUTH_ORIGINAL_STORAGE_KEY);
-
-      if (storedUser) {
-        if (!isMounted) return;
-        setUser(storedUser);
-
-        if (storedOriginalUser) {
-          setOriginalUser(storedOriginalUser);
-        } else {
-          setOriginalUser(storedUser);
-          saveOriginalAuthUser(storedUser);
-        }
-
-        setLoading(false);
-        return;
-      }
-
       try {
         const res = await fetch('/api/auth/me', {
           method: 'GET',
@@ -213,10 +195,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
       } catch {
         if (!isMounted) return;
-        setUser(null);
-        setOriginalUser(null);
-        saveAuthUser(null);
-        saveOriginalAuthUser(null);
+
+        const storedUser = loadStoredUser(AUTH_STORAGE_KEY);
+        const storedOriginalUser = loadStoredUser(AUTH_ORIGINAL_STORAGE_KEY);
+
+        if (storedUser) {
+          setUser(storedUser);
+          setOriginalUser(storedOriginalUser || storedUser);
+          saveOriginalAuthUser(storedOriginalUser || storedUser);
+        } else {
+          setUser(null);
+          setOriginalUser(null);
+          saveAuthUser(null);
+          saveOriginalAuthUser(null);
+        }
       } finally {
         if (isMounted) {
           setLoading(false);
