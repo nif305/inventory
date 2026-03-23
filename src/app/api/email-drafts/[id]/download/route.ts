@@ -7,64 +7,75 @@ function sanitizeHeader(value?: string | null) {
   return String(value || '').replace(/\r/g, ' ').replace(/\n/g, ' ').trim();
 }
 
-function buildEmlContent(params: {
+function buildEml(params: {
   to: string;
   subject: string;
-  html: string;
+  htmlBody: string;
 }) {
-  const headers = [
-    `To: ${sanitizeHeader(params.to)}`,
-    `Subject: ${sanitizeHeader(params.subject)}`,
+  const boundary = `----=_Part_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  const to = sanitizeHeader(params.to);
+  const subject = sanitizeHeader(params.subject);
+  const htmlBody = params.htmlBody || '<div dir="rtl">—</div>';
+
+  return [
+    `To: ${to}`,
+    `Subject: ${subject}`,
     'MIME-Version: 1.0',
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: 8bit',
+    '',
+    'يرجى فتح هذه الرسالة في عميل بريد يدعم HTML.',
+    '',
+    `--${boundary}`,
     'Content-Type: text/html; charset=UTF-8',
     'Content-Transfer-Encoding: 8bit',
     '',
-  ];
-
-  return `${headers.join('\r\n')}\r\n${params.html}`;
+    htmlBody,
+    '',
+    `--${boundary}--`,
+    '',
+  ].join('\r\n');
 }
 
 export async function GET(
   _request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params;
-
-    if (!id) {
-      return NextResponse.json({ error: 'Missing draft id' }, { status: 400 });
-    }
+    const { id } = await context.params;
 
     const draft = await prisma.emailDraft.findUnique({
       where: { id },
     });
 
     if (!draft) {
-      return NextResponse.json({ error: 'Draft not found' }, { status: 404 });
+      return NextResponse.json({ error: 'مسودة البريد غير موجودة' }, { status: 404 });
     }
 
-    const emlContent = buildEmlContent({
+    const eml = buildEml({
       to: draft.recipient,
       subject: draft.subject,
-      html: draft.body,
+      htmlBody: draft.body || '<div dir="rtl">—</div>',
     });
 
-    const safeFileName = `${String(draft.subject || 'email-draft')
+    const safeName = sanitizeHeader(draft.subject || `draft-${draft.id}`)
       .replace(/[\\/:*?"<>|]+/g, '-')
       .replace(/\s+/g, ' ')
-      .trim() || 'email-draft'}.eml`;
+      .trim();
 
-    return new NextResponse(emlContent, {
+    return new NextResponse(eml, {
       status: 200,
       headers: {
         'Content-Type': 'message/rfc822; charset=UTF-8',
-        'Content-Disposition': `attachment; filename="${safeFileName}"`,
-        'Cache-Control': 'no-store',
+        'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`${safeName}.eml`)}`,
       },
     });
   } catch (error: any) {
     return NextResponse.json(
-      { error: error?.message || 'Failed to download email draft' },
+      { error: error?.message || 'تعذر تنزيل ملف المراسلة حاليًا' },
       { status: 500 }
     );
   }

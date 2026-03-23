@@ -61,7 +61,6 @@ export default function EmailDraftsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<EmailDraftRow | null>(null);
-  const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
   const isManager = user?.role === 'manager';
 
@@ -112,37 +111,6 @@ export default function EmailDraftsPage() {
     };
   }, [rows]);
 
-  async function handleDownload(id: string) {
-    try {
-      setDownloadingId(id);
-      const res = await fetch(`/api/email-drafts/${id}/download`, {
-        method: 'GET',
-      });
-
-      if (!res.ok) {
-        throw new Error('DOWNLOAD_FAILED');
-      }
-
-      const blob = await res.blob();
-      const contentDisposition = res.headers.get('content-disposition') || '';
-      const match = contentDisposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
-      const filename = decodeURIComponent(match?.[1] || match?.[2] || `${id}.eml`);
-
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      window.URL.revokeObjectURL(url);
-    } catch {
-      window.alert('تعذر تنزيل ملف المراسلة حالياً');
-    } finally {
-      setDownloadingId(null);
-    }
-  }
-
   if (!isManager) {
     return (
       <div className="rounded-[22px] border border-red-200 bg-red-50 p-6 text-center text-red-700 sm:rounded-[26px]">
@@ -159,37 +127,26 @@ export default function EmailDraftsPage() {
             المراسلات الخارجية
           </h1>
           <p className="text-[13px] leading-7 text-[#61706f] sm:text-sm">
-            استعراض المسودات والمراسلات الجاهزة للإرسال ومتابعة حالتها.
+            استعراض المسودات الخارجية الجاهزة للتنزيل بصيغة البريد الإلكتروني الرسمي.
           </p>
         </div>
 
         <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
           <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none sm:rounded-2xl">
             <div className="text-[12px] text-[#6f7b7a]">إجمالي العناصر</div>
-            <div className="mt-1 text-[22px] font-extrabold leading-none text-[#016564] sm:text-xl">
-              {stats.total}
-            </div>
+            <div className="mt-1 text-[22px] font-extrabold leading-none text-[#016564] sm:text-xl">{stats.total}</div>
           </Card>
-
           <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none sm:rounded-2xl">
             <div className="text-[12px] text-[#6f7b7a]">المسودات</div>
-            <div className="mt-1 text-[22px] font-extrabold leading-none text-slate-700 sm:text-xl">
-              {stats.drafts}
-            </div>
+            <div className="mt-1 text-[22px] font-extrabold leading-none text-slate-700 sm:text-xl">{stats.drafts}</div>
           </Card>
-
           <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none sm:rounded-2xl">
             <div className="text-[12px] text-[#6f7b7a]">الجاهزة</div>
-            <div className="mt-1 text-[22px] font-extrabold leading-none text-[#d0b284] sm:text-xl">
-              {stats.ready}
-            </div>
+            <div className="mt-1 text-[22px] font-extrabold leading-none text-[#d0b284] sm:text-xl">{stats.ready}</div>
           </Card>
-
           <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none sm:rounded-2xl">
             <div className="text-[12px] text-[#6f7b7a]">المرسلة</div>
-            <div className="mt-1 text-[22px] font-extrabold leading-none text-[#498983] sm:text-xl">
-              {stats.sent}
-            </div>
+            <div className="mt-1 text-[22px] font-extrabold leading-none text-[#498983] sm:text-xl">{stats.sent}</div>
           </Card>
         </div>
       </section>
@@ -217,7 +174,6 @@ export default function EmailDraftsPage() {
         ) : (
           filteredRows.map((row) => {
             const status = statusMeta(row.status);
-            const isDownloading = downloadingId === row.id;
 
             return (
               <Card
@@ -241,23 +197,12 @@ export default function EmailDraftsPage() {
                       <div className="break-all">نسخة: {row.cc || '—'}</div>
                       <div>الإنشاء: {formatDate(row.createdAt)}</div>
                       <div>التحديث: {formatDate(row.updatedAt)}</div>
-                      <div className="break-words sm:col-span-2">
-                        المنشئ: {row.createdBy?.fullName || '—'}
-                      </div>
                     </div>
                   </div>
 
                   <div className="flex w-full flex-col gap-2 sm:w-auto">
                     <Button className="w-full sm:w-auto" onClick={() => setSelected(row)}>
                       فتح التفاصيل
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      className="w-full sm:w-auto"
-                      onClick={() => handleDownload(row.id)}
-                      disabled={isDownloading}
-                    >
-                      {isDownloading ? 'جاري التنزيل...' : 'تنزيل .eml'}
                     </Button>
                   </div>
                 </div>
@@ -304,42 +249,48 @@ export default function EmailDraftsPage() {
               </div>
 
               <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl">
-                <div className="text-xs font-bold text-[#016564]">المنشئ</div>
-                <div className="mt-1 break-words text-sm leading-7 text-[#304342]">
-                  {selected.createdBy?.fullName || '—'}
-                </div>
-              </div>
-
-              <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl">
                 <div className="text-xs font-bold text-[#016564]">تاريخ الإنشاء</div>
                 <div className="mt-1 text-sm leading-7 text-[#304342]">
                   {formatDate(selected.createdAt)}
                 </div>
               </div>
 
-              <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl">
-                <div className="text-xs font-bold text-[#016564]">تاريخ التحديث</div>
-                <div className="mt-1 text-sm leading-7 text-[#304342]">
-                  {formatDate(selected.updatedAt)}
-                </div>
-              </div>
-
               <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:col-span-2 sm:rounded-2xl">
-                <div className="text-xs font-bold text-[#016564]">نص المراسلة</div>
-                <div className="mt-1 whitespace-pre-wrap break-words text-sm leading-7 text-[#304342]">
-                  {selected.body || '—'}
-                </div>
+                <div className="text-xs font-bold text-[#016564]">المذكرة</div>
+                <div
+                  dir="rtl"
+                  className="mt-3 overflow-x-auto rounded-2xl border border-[#e7ebea] bg-[#fcfdfd] p-4"
+                  dangerouslySetInnerHTML={{ __html: selected.body || '<div>—</div>' }}
+                />
               </div>
             </div>
 
             <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
               <Button
                 className="w-full sm:w-auto"
-                onClick={() => handleDownload(selected.id)}
-                disabled={downloadingId === selected.id}
+                onClick={async () => {
+                  try {
+                    const res = await fetch(`/api/email-drafts/${selected.id}/download`);
+                    if (!res.ok) {
+                      throw new Error('تعذر تنزيل ملف المراسلة حاليًا');
+                    }
+                    const blob = await res.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `${selected.subject}.eml`;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    window.URL.revokeObjectURL(url);
+                  } catch (error: any) {
+                    alert(error?.message || 'تعذر تنزيل ملف المراسلة حاليًا');
+                  }
+                }}
               >
-                {downloadingId === selected.id ? 'جاري التنزيل...' : 'تنزيل .eml'}
+                تنزيل .eml
               </Button>
+
               <Button variant="ghost" onClick={() => setSelected(null)} className="w-full sm:w-auto">
                 إغلاق
               </Button>
