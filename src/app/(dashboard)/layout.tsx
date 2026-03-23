@@ -22,14 +22,14 @@ type NavGroup = {
 
 const iconClass = 'h-5 w-5 shrink-0';
 
-const managerWarehouseGroups: NavGroup[] = [
+const managerGroups: NavGroup[] = [
   {
     title: 'لوحة التحكم',
     items: [
       {
         href: '/dashboard',
         label: 'لوحة التحكم',
-        roles: ['manager', 'warehouse'],
+        roles: ['manager'],
         icon: (
           <svg className={iconClass} viewBox="0 0 24 24" fill="none">
             <path d="M4 13h7V4H4v9Z" stroke="currentColor" strokeWidth="1.8" />
@@ -47,7 +47,7 @@ const managerWarehouseGroups: NavGroup[] = [
       {
         href: '/inventory',
         label: 'المخزون',
-        roles: ['manager', 'warehouse'],
+        roles: ['manager'],
         icon: (
           <svg className={iconClass} viewBox="0 0 24 24" fill="none">
             <path d="M4 7.5 12 3l8 4.5-8 4.5L4 7.5Z" stroke="currentColor" strokeWidth="1.8" />
@@ -59,7 +59,7 @@ const managerWarehouseGroups: NavGroup[] = [
       {
         href: '/requests',
         label: 'الطلبات التشغيلية',
-        roles: ['manager', 'warehouse'],
+        roles: ['manager'],
         icon: (
           <svg className={iconClass} viewBox="0 0 24 24" fill="none">
             <path d="M7 4h7l3 3v13H7V4Z" stroke="currentColor" strokeWidth="1.8" />
@@ -71,7 +71,7 @@ const managerWarehouseGroups: NavGroup[] = [
       {
         href: '/returns',
         label: 'الإرجاعات التشغيلية',
-        roles: ['manager', 'warehouse'],
+        roles: ['manager'],
         icon: (
           <svg className={iconClass} viewBox="0 0 24 24" fill="none">
             <path d="M8 8H5V5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
@@ -141,7 +141,7 @@ const managerWarehouseGroups: NavGroup[] = [
       {
         href: '/messages',
         label: 'المراسلات الداخلية',
-        roles: ['manager', 'warehouse', 'user'],
+        roles: ['manager'],
         icon: (
           <svg className={iconClass} viewBox="0 0 24 24" fill="none">
             <path d="M5 7.5A2.5 2.5 0 0 1 7.5 5h9A2.5 2.5 0 0 1 19 7.5v6A2.5 2.5 0 0 1 16.5 16H10l-4 3v-3.5A2.5 2.5 0 0 1 5 13.5v-6Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
@@ -162,7 +162,7 @@ const managerWarehouseGroups: NavGroup[] = [
       {
         href: '/notifications',
         label: 'الإشعارات',
-        roles: ['manager', 'warehouse', 'user'],
+        roles: ['manager'],
         icon: (
           <svg className={iconClass} viewBox="0 0 24 24" fill="none">
             <path d="M6 16.5h12l-1.5-2V10a4.5 4.5 0 1 0-9 0v4.5l-1.5 2Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
@@ -223,9 +223,96 @@ const managerWarehouseGroups: NavGroup[] = [
   },
 ];
 
+const warehouseGroups: NavGroup[] = [
+  {
+    title: 'لوحة التحكم',
+    items: [
+      {
+        href: '/dashboard',
+        label: 'لوحة التحكم',
+        roles: ['warehouse'],
+        icon: (
+          <svg className={iconClass} viewBox="0 0 24 24" fill="none">
+            <path d="M4 13h7V4H4v9Z" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M13 20h7v-5h-7v5Z" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M13 11h7V4h-7v7Z" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M4 20h7v-5H4v5Z" stroke="currentColor" strokeWidth="1.8" />
+          </svg>
+        ),
+      },
+    ],
+  },
+  {
+    title: 'أعمال المخزن',
+    items: [
+      {
+        href: '/inventory',
+        label: 'المخزون',
+        roles: ['warehouse'],
+        icon: (
+          <svg className={iconClass} viewBox="0 0 24 24" fill="none">
+            <path d="M4 7.5 12 3l8 4.5-8 4.5L4 7.5Z" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M4 7.5V16.5L12 21l8-4.5V7.5" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M12 12v9" stroke="currentColor" strokeWidth="1.8" />
+          </svg>
+        ),
+      },
+      {
+        href: '/requests',
+        label: 'استقبال الطلبات والصرف',
+        roles: ['warehouse'],
+        icon: (
+          <svg className={iconClass} viewBox="0 0 24 24" fill="none">
+            <path d="M7 4h7l3 3v13H7V4Z" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M14 4v4h4" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M10 12h4M10 16h4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+        ),
+      },
+      {
+        href: '/returns',
+        label: 'المرتجعات وفحص السلامة',
+        roles: ['warehouse'],
+        icon: (
+          <svg className={iconClass} viewBox="0 0 24 24" fill="none">
+            <path d="M8 8H5V5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+            <path d="M5 8c1.8-2.4 4-3.5 7-3.5 4.7 0 8 3.3 8 8s-3.3 8-8 8c-3.3 0-5.8-1.3-7.5-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+        ),
+      },
+    ],
+  },
+  {
+    title: 'المراسلات',
+    items: [
+      {
+        href: '/messages',
+        label: 'المراسلات الداخلية',
+        roles: ['warehouse'],
+        icon: (
+          <svg className={iconClass} viewBox="0 0 24 24" fill="none">
+            <path d="M5 7.5A2.5 2.5 0 0 1 7.5 5h9A2.5 2.5 0 0 1 19 7.5v6A2.5 2.5 0 0 1 16.5 16H10l-4 3v-3.5A2.5 2.5 0 0 1 5 13.5v-6Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+          </svg>
+        ),
+      },
+      {
+        href: '/notifications',
+        label: 'الإشعارات',
+        roles: ['warehouse'],
+        icon: (
+          <svg className={iconClass} viewBox="0 0 24 24" fill="none">
+            <path d="M6 16.5h12l-1.5-2V10a4.5 4.5 0 1 0-9 0v4.5l-1.5 2Z" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round" />
+            <path d="M10 19a2 2 0 0 0 4 0" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+          </svg>
+        ),
+      },
+    ],
+  },
+];
+
 const employeeGroups: NavGroup[] = [
   {
-    title: 'خدماتي',
+    title: 'لوحة معلوماتي',
     items: [
       {
         href: '/dashboard',
@@ -240,6 +327,11 @@ const employeeGroups: NavGroup[] = [
           </svg>
         ),
       },
+    ],
+  },
+  {
+    title: 'خدماتي الأساسية',
+    items: [
       {
         href: '/requests',
         label: 'طلب مواد',
@@ -275,6 +367,65 @@ const employeeGroups: NavGroup[] = [
           </svg>
         ),
       },
+    ],
+  },
+  {
+    title: 'الخدمات',
+    items: [
+      {
+        href: '/suggestions?new=1&type=MAINTENANCE',
+        label: 'طلب صيانة',
+        roles: ['user'],
+        icon: (
+          <svg className={iconClass} viewBox="0 0 24 24" fill="none">
+            <path d="m14.7 6.3 3 3-8.4 8.4H6.3v-3L14.7 6.3Z" stroke="currentColor" strokeWidth="1.8" />
+            <path d="m13.3 7.7 3 3" stroke="currentColor" strokeWidth="1.8" />
+          </svg>
+        ),
+      },
+      {
+        href: '/suggestions?new=1&type=CLEANING',
+        label: 'طلب نظافة',
+        roles: ['user'],
+        icon: (
+          <svg className={iconClass} viewBox="0 0 24 24" fill="none">
+            <path d="M7 21h10" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M12 3v12" stroke="currentColor" strokeWidth="1.8" />
+            <path d="m8 7 4-4 4 4" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M8 15h8" stroke="currentColor" strokeWidth="1.8" />
+          </svg>
+        ),
+      },
+      {
+        href: '/suggestions?new=1&type=PURCHASE',
+        label: 'طلب شراء مباشر',
+        roles: ['user'],
+        icon: (
+          <svg className={iconClass} viewBox="0 0 24 24" fill="none">
+            <path d="M6 7h13l-1.2 6.2a2 2 0 0 1-2 1.6H9.3a2 2 0 0 1-2-1.6L6 7Z" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M6 7 5.2 5.3A1.5 1.5 0 0 0 3.8 4.5H3" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+            <circle cx="10" cy="18.5" r="1.2" fill="currentColor" />
+            <circle cx="17" cy="18.5" r="1.2" fill="currentColor" />
+          </svg>
+        ),
+      },
+      {
+        href: '/suggestions?new=1&type=OTHER',
+        label: 'طلب آخر',
+        roles: ['user'],
+        icon: (
+          <svg className={iconClass} viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M9.5 9a2.5 2.5 0 1 1 4 2c-.8.6-1.5 1.1-1.5 2" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M12 17h.01" stroke="currentColor" strokeWidth="1.8" />
+          </svg>
+        ),
+      },
+    ],
+  },
+  {
+    title: 'المراسلات',
+    items: [
       {
         href: '/messages',
         label: 'المراسلات الداخلية',
@@ -301,8 +452,9 @@ const employeeGroups: NavGroup[] = [
 ];
 
 function getNavGroups(role?: string): NavGroup[] {
-  if (role === 'user') return employeeGroups;
-  return managerWarehouseGroups;
+  if (role === 'manager') return managerGroups;
+  if (role === 'warehouse') return warehouseGroups;
+  return employeeGroups;
 }
 
 function canAccess(item: NavItem, role?: string) {
@@ -312,6 +464,12 @@ function canAccess(item: NavItem, role?: string) {
 
 function isActive(pathname: string, href: string) {
   if (href === '/dashboard') return pathname === '/dashboard';
+
+  if (href.includes('?')) {
+    const [base] = href.split('?');
+    return pathname === base || pathname.startsWith(`${base}/`);
+  }
+
   return pathname === href || pathname.startsWith(`${href}/`);
 }
 
@@ -602,8 +760,8 @@ export default function DashboardLayout({
             </div>
           </header>
 
-          <main className="min-w-0 flex-1 overflow-x-hidden px-3 py-3 sm:px-4 sm:py-4 lg:px-6 lg:py-6">
-            <div className="mx-auto min-w-0 max-w-[1600px]">{children}</div>
+          <main className="min-w-0 flex-1 overflow-x-hidden px-2 py-2 sm:px-4 sm:py-4 lg:px-5 lg:py-5 xl:px-6 xl:py-6">
+            <div className="mx-auto w-full min-w-0 max-w-[1680px] overflow-x-hidden">{children}</div>
           </main>
         </div>
       </div>
