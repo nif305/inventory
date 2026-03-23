@@ -602,8 +602,8 @@ export default function DashboardLayout({
             </div>
           </header>
 
-          <main className="min-w-0 flex-1 overflow-x-hidden px-2 py-2 sm:px-4 sm:py-4 lg:px-5 lg:py-5 xl:px-6 xl:py-6">
-            <div className="mx-auto w-full min-w-0 max-w-[1680px] overflow-x-hidden">{children}</div>
+          <main className="min-w-0 flex-1 overflow-x-hidden px-3 py-3 sm:px-4 sm:py-4 lg:px-6 lg:py-6">
+            <div className="mx-auto min-w-0 max-w-[1600px]">{children}</div>
           </main>
         </div>
       </div>

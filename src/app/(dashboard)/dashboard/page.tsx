@@ -355,6 +355,7 @@ function SectionTitle({
   );
 }
 
+
 function WarehouseDashboard({ fullName }: { fullName?: string }) {
   const [requests, setRequests] = useState<RequestRow[]>([]);
   const [inventory, setInventory] = useState<InventoryItem[]>([]);
@@ -368,7 +369,7 @@ function WarehouseDashboard({ fullName }: { fullName?: string }) {
     const load = async () => {
       const [requestsRes, inventoryRes] = await Promise.all([
         fetch('/api/requests', { cache: 'no-store' }),
-        fetch('/api/inventory?limit=200', { cache: 'no-store' }),
+        fetch('/api/inventory?limit=300', { cache: 'no-store' }),
       ]);
 
       const requestsJson = await requestsRes.json().catch(() => null);
@@ -390,63 +391,139 @@ function WarehouseDashboard({ fullName }: { fullName?: string }) {
   }, []);
 
   const stats = useMemo(() => {
+    const pendingRequests = requests.filter((item) => item.status === 'PENDING').length;
+    const approvedRequests = requests.filter((item) => item.status === 'APPROVED').length;
+    const pendingReturns = returns.filter((item) => item.status === 'PENDING').length;
+    const overdueCustody = custody.filter((item) => item.status === 'OVERDUE' || daysLate(item.dueDate) > 0).length;
+    const lowStock = inventory.filter((item) => item.status === 'LOW_STOCK').length;
+    const outOfStock = inventory.filter((item) => item.status === 'OUT_OF_STOCK').length;
+    const totalAlerts = notifications.filter((item) => !item.isRead).length;
+
     return {
-      newRequests: requests.filter((item) => item.status === 'PENDING').length,
-      readyToIssue: requests.filter((item) => item.status === 'APPROVED').length,
-      pendingReturns: returns.filter((item) => item.status === 'PENDING').length,
-      lowStock: inventory.filter((item) => item.status === 'LOW_STOCK').length,
-      outOfStock: inventory.filter((item) => item.status === 'OUT_OF_STOCK').length,
-      overdue: custody.filter((item) => item.status === 'OVERDUE' || daysLate(item.dueDate) > 0).length,
-      unreadAlerts: notifications.filter(
-        (item) => !item.isRead && (item.kind === 'alert' || item.severity === 'critical')
-      ).length,
+      pendingRequests,
+      approvedRequests,
+      pendingReturns,
+      overdueCustody,
+      lowStock,
+      outOfStock,
+      totalAlerts,
+      totalRisk: pendingRequests + pendingReturns + overdueCustody + lowStock + outOfStock,
     };
-  }, [requests, returns, inventory, custody, notifications]);
+  }, [requests, returns, custody, inventory, notifications]);
 
-  const actionRows = useMemo<FocusRow[]>(() => {
-    const rows: FocusRow[] = [
-      ...requests
-        .filter((item) => item.status === 'PENDING')
-        .slice(0, 3)
-        .map((item) => ({
-          id: `req-p-${item.id}`,
-          title: 'طلبات جديدة بانتظار التجهيز',
-          note: `${item.code || item.id} — ${item.requester?.fullName || item.requester?.department || '—'}`,
-          href: '/requests',
-          level: 'critical' as const,
-        })),
-      ...requests
-        .filter((item) => item.status === 'APPROVED')
-        .slice(0, 3)
-        .map((item) => ({
-          id: `req-a-${item.id}`,
-          title: 'طلبات جاهزة للصرف',
-          note: `${item.code || item.id} — ${item.requester?.fullName || item.requester?.department || '—'}`,
-          href: '/requests',
-          level: 'warning' as const,
-        })),
-      ...returns
-        .filter((item) => item.status === 'PENDING')
-        .slice(0, 2)
-        .map((item) => ({
-          id: `ret-${item.id}`,
-          title: 'إرجاعات بانتظار الاستلام',
-          note: `${item.code || item.id} — ${item.custody?.user?.fullName || '—'}`,
-          href: '/returns',
-          level: 'warning' as const,
-        })),
-    ];
+  const focusRows = useMemo<FocusRow[]>(() => {
+    const rows: FocusRow[] = [];
 
-    return rows.slice(0, 8);
-  }, [requests, returns]);
+    if (stats.pendingRequests > 0) {
+      rows.push({
+        id: 'wh-1',
+        title: 'طلبات مواد جديدة',
+        note: `${stats.pendingRequests} طلبًا بانتظار المراجعة أو التجهيز`,
+        href: '/requests',
+        level: 'critical',
+      });
+    }
+
+    if (stats.approvedRequests > 0) {
+      rows.push({
+        id: 'wh-2',
+        title: 'طلبات جاهزة للصرف',
+        note: `${stats.approvedRequests} طلبًا معتمدًا يحتاج صرفًا فعليًا`,
+        href: '/requests',
+        level: 'warning',
+      });
+    }
+
+    if (stats.pendingReturns > 0) {
+      rows.push({
+        id: 'wh-3',
+        title: 'مرتجعات بانتظار الفحص',
+        note: `${stats.pendingReturns} حالة تحتاج استلامًا والتحقق من سلامة المرتجع`,
+        href: '/returns',
+        level: 'warning',
+      });
+    }
+
+    if (stats.overdueCustody > 0) {
+      rows.push({
+        id: 'wh-4',
+        title: 'عهد متأخرة',
+        note: `${stats.overdueCustody} عهدة تحتاج متابعة مع الجهة المستفيدة`,
+        href: '/custody',
+        level: 'critical',
+      });
+    }
+
+    if (stats.lowStock > 0 || stats.outOfStock > 0) {
+      rows.push({
+        id: 'wh-5',
+        title: 'تنبيهات مخزون',
+        note: `${stats.lowStock} منخفض و${stats.outOfStock} نافد`,
+        href: '/inventory',
+        level: 'critical',
+      });
+    }
+
+    return rows.slice(0, 5);
+  }, [stats]);
+
+  const operationCards = [
+    {
+      title: 'طلبات المواد الجديدة',
+      value: stats.pendingRequests,
+      note: 'مدخل العمل الرئيسي لمسؤول المخزن',
+      href: '/requests',
+      icon: 'requests' as const,
+      level: stats.pendingRequests > 0 ? 'critical' : 'normal',
+    },
+    {
+      title: 'طلبات بانتظار الصرف',
+      value: stats.approvedRequests,
+      note: 'طلبات معتمدة تحتاج تجهيزًا وتسليمًا',
+      href: '/requests',
+      icon: 'inventory' as const,
+      level: stats.approvedRequests > 0 ? 'warning' : 'normal',
+    },
+    {
+      title: 'مرتجعات بانتظار الفحص',
+      value: stats.pendingReturns,
+      note: 'تحتاج استلامًا والتحقق من سلامة المرتجع',
+      href: '/returns',
+      icon: 'returns' as const,
+      level: stats.pendingReturns > 0 ? 'warning' : 'normal',
+    },
+    {
+      title: 'العهد المتأخرة',
+      value: stats.overdueCustody,
+      note: 'تحتاج متابعة وضبطًا مستمرًا',
+      href: '/custody',
+      icon: 'custody' as const,
+      level: stats.overdueCustody > 0 ? 'critical' : 'normal',
+    },
+    {
+      title: 'أصناف منخفضة المخزون',
+      value: stats.lowStock,
+      note: 'قبل أن تتحول إلى نفاد فعلي',
+      href: '/inventory',
+      icon: 'warning' as const,
+      level: stats.lowStock > 0 ? 'warning' : 'normal',
+    },
+    {
+      title: 'أصناف نافدة',
+      value: stats.outOfStock,
+      note: 'تؤثر مباشرة على قدرة الصرف',
+      href: '/inventory',
+      icon: 'inventory' as const,
+      level: stats.outOfStock > 0 ? 'critical' : 'normal',
+    },
+  ];
 
   const quickLinks = [
-    { title: 'تجهيز الطلبات', href: '/requests', icon: 'requests' as const, note: `${stats.newRequests} جديدة` },
-    { title: 'صرف المواد', href: '/requests', icon: 'inventory' as const, note: `${stats.readyToIssue} جاهزة` },
-    { title: 'استلام الإرجاع', href: '/returns', icon: 'returns' as const, note: `${stats.pendingReturns} بانتظارك` },
-    { title: 'العهد الحالية', href: '/custody', icon: 'custody' as const, note: `${stats.overdue} متأخرة` },
-    { title: 'المخزون', href: '/inventory', icon: 'inventory' as const, note: `${stats.lowStock + stats.outOfStock} تنبيه` },
-    { title: 'الإشعارات', href: '/notifications', icon: 'notifications' as const, note: `${stats.unreadAlerts} غير مقروءة` },
+    { title: 'استقبال الطلبات', href: '/requests', icon: 'requests' as const, note: 'مراجعة وتجهيز' },
+    { title: 'فحص المرتجعات', href: '/returns', icon: 'returns' as const, note: 'استلام وتوثيق' },
+    { title: 'العهد', href: '/custody', icon: 'custody' as const, note: 'متابعة الالتزام' },
+    { title: 'المخزون', href: '/inventory', icon: 'inventory' as const, note: 'الكميات والحالة' },
+    { title: 'الإشعارات', href: '/notifications', icon: 'notifications' as const, note: `${stats.totalAlerts} غير مقروءة` },
   ];
 
   return (
@@ -455,7 +532,7 @@ function WarehouseDashboard({ fullName }: { fullName?: string }) {
         <div className="absolute -left-10 top-0 h-36 w-36 rounded-full bg-[#d0b284]/10 blur-2xl" />
         <div className="absolute bottom-0 right-0 h-44 w-44 rounded-full bg-white/5 blur-2xl" />
 
-        <div className="relative grid gap-4 xl:grid-cols-[1.25fr_0.95fr] sm:gap-5">
+        <div className="relative grid gap-4 xl:grid-cols-[1.2fr_1fr] sm:gap-5">
           <div>
             <div className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/10 px-3 py-2 text-[12px]">
               <Icon name="inventory" className="h-4 w-4" />
@@ -466,16 +543,16 @@ function WarehouseDashboard({ fullName }: { fullName?: string }) {
               {fullName ? `مرحبًا ${fullName}` : 'مرحبًا بك'}
             </h1>
             <p className="mt-3 max-w-[760px] text-[13px] leading-7 text-white/85 sm:text-[14px] sm:leading-8">
-              رؤية سريعة لما يحتاج التنفيذ الآن داخل المخزون، الطلبات، والإرجاعات.
+              هذه اللوحة مكرسة بالكامل لدورة المواد التدريبية: استقبال الطلبات، تجهيز الصرف، استلام الإرجاعات، والتحقق من سلامة المرتجع والمخزون.
             </p>
           </div>
 
           <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
             {[
-              { label: 'طلبات جديدة', value: stats.newRequests, icon: 'requests' as const },
-              { label: 'جاهزة للصرف', value: stats.readyToIssue, icon: 'inventory' as const },
-              { label: 'إرجاعات معلقة', value: stats.pendingReturns, icon: 'returns' as const },
-              { label: 'تنبيهات المخزون', value: stats.lowStock + stats.outOfStock, icon: 'warning' as const },
+              { label: 'طلبات جديدة', value: stats.pendingRequests, icon: 'requests' as const },
+              { label: 'بانتظار الصرف', value: stats.approvedRequests, icon: 'inventory' as const },
+              { label: 'مرتجعات للفحص', value: stats.pendingReturns, icon: 'returns' as const },
+              { label: 'إجمالي المخاطر التشغيلية', value: stats.totalRisk, icon: 'warning' as const },
             ].map((item) => (
               <div
                 key={item.label}
@@ -497,56 +574,7 @@ function WarehouseDashboard({ fullName }: { fullName?: string }) {
       </section>
 
       <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 sm:gap-4">
-        {[
-          {
-            title: 'طلبات جديدة بانتظار التجهيز',
-            value: stats.newRequests,
-            note: 'تحتاج معالجة مباشرة',
-            href: '/requests',
-            icon: 'requests' as const,
-            level: stats.newRequests > 0 ? 'critical' : 'normal',
-          },
-          {
-            title: 'طلبات جاهزة للصرف',
-            value: stats.readyToIssue,
-            note: 'اعتمدت وتحتاج تنفيذًا',
-            href: '/requests',
-            icon: 'inventory' as const,
-            level: stats.readyToIssue > 0 ? 'warning' : 'normal',
-          },
-          {
-            title: 'إرجاعات بانتظار الاستلام',
-            value: stats.pendingReturns,
-            note: 'تحتاج استلامًا وتوثيقًا',
-            href: '/returns',
-            icon: 'returns' as const,
-            level: stats.pendingReturns > 0 ? 'warning' : 'normal',
-          },
-          {
-            title: 'مواد منخفضة المخزون',
-            value: stats.lowStock,
-            note: 'قبل أن تتحول إلى نفاد',
-            href: '/inventory',
-            icon: 'warning' as const,
-            level: stats.lowStock > 0 ? 'warning' : 'normal',
-          },
-          {
-            title: 'مواد نافدة أو غير متاحة',
-            value: stats.outOfStock,
-            note: 'تؤثر على تلبية الطلبات',
-            href: '/inventory',
-            icon: 'inventory' as const,
-            level: stats.outOfStock > 0 ? 'critical' : 'normal',
-          },
-          {
-            title: 'عهد متأخرة',
-            value: stats.overdue,
-            note: 'تحتاج متابعة فورية',
-            href: '/custody',
-            icon: 'custody' as const,
-            level: stats.overdue > 0 ? 'critical' : 'normal',
-          },
-        ].map((card) => {
+        {operationCards.map((card) => {
           const tone = levelClasses(card.level);
 
           return (
@@ -569,17 +597,17 @@ function WarehouseDashboard({ fullName }: { fullName?: string }) {
         })}
       </section>
 
-      <section className="grid gap-3 xl:grid-cols-[1.2fr_0.8fr] sm:gap-4">
+      <section className="grid gap-3 xl:grid-cols-[1.15fr_0.85fr] sm:gap-4">
         <Card className="rounded-[22px] border border-[#dde8e6] bg-white p-4 shadow-soft sm:rounded-[28px] sm:p-5">
-          <SectionTitle title="ما الذي تعمل عليه الآن" note="أهم العناصر التنفيذية الحالية." href="/requests" action="فتح الطلبات" />
+          <SectionTitle title="ما الذي أعمل عليه الآن؟" note="المهام الأساسية اليومية لمسؤول المخزن." href="/requests" action="فتح التشغيل" />
 
-          {actionRows.length === 0 ? (
+          {focusRows.length === 0 ? (
             <div className="rounded-[20px] border border-dashed border-[#d8e4e2] p-6 text-center text-slate-500 sm:rounded-[22px] sm:p-10">
               لا توجد عناصر عاجلة حاليًا
             </div>
           ) : (
             <div className="space-y-3">
-              {actionRows.map((row) => {
+              {focusRows.map((row) => {
                 const tone = levelClasses(row.level);
 
                 return (
@@ -599,7 +627,7 @@ function WarehouseDashboard({ fullName }: { fullName?: string }) {
         </Card>
 
         <Card className="rounded-[22px] border border-[#dde8e6] bg-white p-4 shadow-soft sm:rounded-[28px] sm:p-5">
-          <SectionTitle title="اختصارات التنفيذ" note="أكثر المسارات استخدامًا لمسؤول المخزن." />
+          <SectionTitle title="اختصارات مسؤول المخزن" note="المسارات المرتبطة مباشرة بمهامه اليومية." />
 
           <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
             {quickLinks.map((item) => (
@@ -625,6 +653,7 @@ function WarehouseDashboard({ fullName }: { fullName?: string }) {
     </div>
   );
 }
+
 
 function ManagerDashboard({ fullName }: { fullName?: string }) {
   const [requests, setRequests] = useState<RequestRow[]>([]);
@@ -1151,6 +1180,7 @@ function ManagerDashboard({ fullName }: { fullName?: string }) {
   );
 }
 
+
 function UserDashboard({ fullName, userId }: { fullName?: string; userId?: string }) {
   const [requests, setRequests] = useState<RequestRow[]>([]);
   const [suggestions, setSuggestions] = useState<SuggestionItem[]>([]);
@@ -1210,6 +1240,15 @@ function UserDashboard({ fullName, userId }: { fullName?: string; userId?: strin
     [notifications]
   );
 
+  const serviceCounts = useMemo(() => {
+    return {
+      maintenance: mySuggestions.filter((item) => item.category === 'MAINTENANCE' && (item.status === 'PENDING' || item.status === 'UNDER_REVIEW' || item.status === 'APPROVED')).length,
+      cleaning: mySuggestions.filter((item) => item.category === 'CLEANING' && (item.status === 'PENDING' || item.status === 'UNDER_REVIEW' || item.status === 'APPROVED')).length,
+      purchase: mySuggestions.filter((item) => item.category === 'PURCHASE' && (item.status === 'PENDING' || item.status === 'UNDER_REVIEW' || item.status === 'APPROVED')).length,
+      other: mySuggestions.filter((item) => item.category === 'OTHER' && (item.status === 'PENDING' || item.status === 'UNDER_REVIEW' || item.status === 'APPROVED')).length,
+    };
+  }, [mySuggestions]);
+
   const stats = useMemo(() => {
     return {
       openRequests: myRequests.filter((item) => item.status === 'PENDING' || item.status === 'APPROVED').length,
@@ -1217,14 +1256,18 @@ function UserDashboard({ fullName, userId }: { fullName?: string; userId?: strin
       pendingReturns: myReturns.filter((item) => item.status === 'PENDING').length,
       unreadNotifications: myNotifications.filter((item) => !item.isRead).length,
       overdueCustody: myCustody.filter((item) => item.status === 'OVERDUE' || daysLate(item.dueDate) > 0).length,
-      openOtherRequests: mySuggestions.filter((item) => item.status === 'PENDING' || item.status === 'UNDER_REVIEW').length,
+      serviceOpen:
+        serviceCounts.maintenance +
+        serviceCounts.cleaning +
+        serviceCounts.purchase +
+        serviceCounts.other,
     };
-  }, [myRequests, myCustody, myReturns, myNotifications, mySuggestions]);
+  }, [myRequests, myCustody, myReturns, myNotifications, serviceCounts]);
 
   const startCards = [
     {
       title: 'طلب مواد',
-      note: 'لصرف مواد متوفرة من المخزون',
+      note: 'لرفع طلب صرف من المخزون مباشرة',
       href: '/requests?new=1',
       icon: 'requests' as const,
       tone: 'primary' as const,
@@ -1238,27 +1281,27 @@ function UserDashboard({ fullName, userId }: { fullName?: string; userId?: strin
     },
     {
       title: 'طلب صيانة',
-      note: 'عند وجود عطل أو خلل في مادة أو تجهيز',
+      note: 'عند وجود عطل أو خلل في القاعة أو التجهيز',
       href: '/suggestions?new=1&type=MAINTENANCE',
       icon: 'maintenance' as const,
       tone: 'normal' as const,
     },
     {
       title: 'طلب نظافة',
-      note: 'لاحتياج تنظيف أو معالجة بيئة تشغيل',
+      note: 'عند وجود احتياج تنظيف أو ملاحظة بيئية',
       href: '/suggestions?new=1&type=CLEANING',
       icon: 'cleaning' as const,
       tone: 'normal' as const,
     },
     {
       title: 'طلب شراء مباشر',
-      note: 'عند الحاجة إلى صنف غير متوفر أو غير كافٍ',
+      note: 'عند الحاجة إلى مادة أو متطلب غير متوفر',
       href: '/suggestions?new=1&type=PURCHASE',
       icon: 'purchase' as const,
       tone: 'normal' as const,
     },
     {
-      title: 'طلبات أخرى',
+      title: 'طلب آخر',
       note: 'لأي احتياج لا يندرج ضمن المسارات السابقة',
       href: '/suggestions?new=1&type=OTHER',
       icon: 'other' as const,
@@ -1268,12 +1311,12 @@ function UserDashboard({ fullName, userId }: { fullName?: string; userId?: strin
 
   const currentStatusCards = [
     {
-      title: 'طلباتي المفتوحة',
-      value: stats.openRequests + stats.openOtherRequests,
-      note: 'طلبات ما زالت تحت الإجراء أو بانتظار التنفيذ',
+      title: 'طلبات المواد المفتوحة',
+      value: stats.openRequests,
+      note: 'طلبات صرف تحت الإجراء أو بانتظار التنفيذ',
       href: '/requests',
       icon: 'requests' as const,
-      level: stats.openRequests + stats.openOtherRequests > 0 ? 'warning' as const : 'normal' as const,
+      level: stats.openRequests > 0 ? 'warning' as const : 'normal' as const,
     },
     {
       title: 'عهدتي الحالية',
@@ -1281,23 +1324,23 @@ function UserDashboard({ fullName, userId }: { fullName?: string; userId?: strin
       note: 'مواد ما زالت بعهدتك ولم تغلق بعد',
       href: '/custody',
       icon: 'custody' as const,
-      level: 'normal' as const,
+      level: stats.activeCustody > 0 ? 'normal' as const : 'normal' as const,
     },
     {
-      title: 'طلبات إرجاع معلقة',
+      title: 'إرجاعات معلقة',
       value: stats.pendingReturns,
-      note: 'طلبات أرسلتها وما زالت بانتظار الاستلام',
+      note: 'طلبات أرسلتها وتنتظر الاستلام',
       href: '/returns',
       icon: 'returns' as const,
       level: stats.pendingReturns > 0 ? 'warning' as const : 'normal' as const,
     },
     {
-      title: 'إشعارات جديدة',
-      value: stats.unreadNotifications,
-      note: 'اعتمادات أو ملاحظات أو تحديثات على طلباتك',
-      href: '/notifications',
-      icon: 'notifications' as const,
-      level: stats.unreadNotifications > 0 ? 'critical' as const : 'normal' as const,
+      title: 'طلبات خدمية مفتوحة',
+      value: stats.serviceOpen,
+      note: 'صيانة أو نظافة أو شراء أو طلبات أخرى',
+      href: '/suggestions',
+      icon: 'other' as const,
+      level: stats.serviceOpen > 0 ? 'warning' as const : 'normal' as const,
     },
   ];
 
@@ -1359,13 +1402,13 @@ function UserDashboard({ fullName, userId }: { fullName?: string; userId?: strin
               {fullName ? `مرحبًا ${fullName}` : 'مرحبًا بك'}
             </h1>
             <p className="mt-3 max-w-[760px] text-[13px] leading-7 text-white/85 sm:text-[14px] sm:leading-8">
-              من هنا تبدأ كل احتياجاتك بوضوح: طلب مواد، إرجاع، صيانة، نظافة، شراء مباشر، أو أي طلب آخر.
+              لوحة عملية مبسطة تركز على ما يخصك أنت فقط: طلباتك، عهدتك، إرجاعاتك، والإشعارات الخاصة بك، مع وصول مباشر لكل نوع خدمة تحتاجه.
             </p>
           </div>
 
           <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
             {[
-              { label: 'طلباتي المفتوحة', value: stats.openRequests + stats.openOtherRequests, icon: 'requests' as const },
+              { label: 'طلبات مواد مفتوحة', value: stats.openRequests, icon: 'requests' as const },
               { label: 'مواد بعهدتي', value: stats.activeCustody, icon: 'custody' as const },
               { label: 'إرجاعات معلقة', value: stats.pendingReturns, icon: 'returns' as const },
               { label: 'إشعارات جديدة', value: stats.unreadNotifications, icon: 'notifications' as const },
@@ -1391,8 +1434,8 @@ function UserDashboard({ fullName, userId }: { fullName?: string; userId?: strin
 
       <Card className="rounded-[22px] border border-[#dde8e6] bg-white p-4 shadow-soft sm:rounded-[28px] sm:p-5">
         <SectionTitle
-          title="ماذا تريد أن تنجز اليوم؟"
-          note="اختر المسار الصحيح مباشرة دون حيرة أو تنقل عشوائي."
+          title="ابدأ خدمتك من هنا"
+          note="اختر نوع الخدمة المطلوبة مباشرة دون تعقيد."
         />
 
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3 sm:gap-4">
@@ -1450,8 +1493,8 @@ function UserDashboard({ fullName, userId }: { fullName?: string; userId?: strin
       <section className="grid gap-3 xl:grid-cols-[1.15fr_0.85fr] sm:gap-4">
         <Card className="rounded-[22px] border border-[#dde8e6] bg-white p-4 shadow-soft sm:rounded-[28px] sm:p-5">
           <SectionTitle
-            title="وضعك الحالي"
-            note="أهم ما يحتاج منك متابعة أو ينتظر ردًا أو استلامًا."
+            title="آخر ما يخصني"
+            note="أهم المستجدات المرتبطة بطلباتك وعهدتك."
             href="/notifications"
             action="كل التحديثات"
           />
@@ -1483,8 +1526,8 @@ function UserDashboard({ fullName, userId }: { fullName?: string; userId?: strin
 
         <Card className="rounded-[22px] border border-[#dde8e6] bg-white p-4 shadow-soft sm:rounded-[28px] sm:p-5">
           <SectionTitle
-            title="اختصارات سريعة"
-            note="المسارات الأكثر استخدامًا في العمل اليومي."
+            title="اختصاراتي"
+            note="المسارات التي أستخدمها باستمرار."
           />
 
           <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
@@ -1492,7 +1535,7 @@ function UserDashboard({ fullName, userId }: { fullName?: string; userId?: strin
               { title: 'طلباتي', href: '/requests', icon: 'requests' as const },
               { title: 'عهدتي', href: '/custody', icon: 'custody' as const },
               { title: 'الإرجاعات', href: '/returns', icon: 'returns' as const },
-              { title: 'الطلبات الأخرى', href: '/suggestions', icon: 'other' as const },
+              { title: 'الإشعارات', href: '/notifications', icon: 'notifications' as const },
             ].map((item) => (
               <Link
                 key={item.title}
@@ -1515,6 +1558,7 @@ function UserDashboard({ fullName, userId }: { fullName?: string; userId?: strin
     </div>
   );
 }
+
 
 export default function DashboardPage() {
   const { user } = useAuth();
