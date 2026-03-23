@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { usePathname, useSearchParams } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { NotificationBell } from '@/components/layout/NotificationBell';
 
@@ -310,6 +310,12 @@ function canAccess(item: NavItem, role?: string) {
   return item.roles.includes((role as AppRole) || 'user');
 }
 
+function getCurrentCategory() {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  return params.get('category');
+}
+
 function isActive(pathname: string, href: string, searchCategory: string | null) {
   if (href === '/dashboard') return pathname === '/dashboard';
 
@@ -362,14 +368,14 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const searchCategory = searchParams.get('category');
   const { user, logout, switchViewRole, originalUser, canUseRoleSwitch } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [searchCategory, setSearchCategory] = useState<string | null>(null);
 
   useEffect(() => {
+    setSearchCategory(getCurrentCategory());
     setMobileOpen(false);
-  }, [pathname, searchCategory]);
+  }, [pathname]);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
