@@ -1,275 +1,515 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Card } from '@/components/ui/Card';
+import { Badge } from '@/components/ui/Badge';
+import { Button } from '@/components/ui/Button';
+import { Modal } from '@/components/ui/Modal';
+import { Input } from '@/components/ui/Input';
+import { Skeleton } from '@/components/ui/Skeleton';
+import { useAuth } from '@/context/AuthContext';
 
-type PurchaseRequest = {
+type PurchaseApiRow = {
   id: string;
-  code?: string;
-  title?: string;
-  itemName?: string;
-  areaLabel?: string;
-  note?: string;
-  requesterName?: string;
-  requesterEmail?: string;
-  sourcePurpose?: string;
-  status?: string;
+  code: string;
+  items?: string | null;
+  reason?: string | null;
+  budgetNote?: string | null;
+  status?: 'PENDING' | 'APPROVED' | 'ORDERED' | 'RECEIVED' | 'REJECTED' | string;
   createdAt?: string;
-  type?: 'legacy' | 'suggestion';
+  requesterId?: string;
 };
 
-const STATUS_LABELS: Record<string, string> = {
-  PENDING: 'بانتظار المدير',
-  PENDING_APPROVAL: 'بانتظار المدير',
-  OPEN: 'مفتوح',
-  IN_PROGRESS: 'قيد المعالجة',
-  APPROVED: 'تم الاعتماد',
-  REJECTED: 'مرفوض',
-  CLOSED: 'مغلق',
+type SuggestionRow = {
+  id: string;
+  code?: string | null;
+  title?: string | null;
+  description?: string | null;
+  status?: 'PENDING' | 'APPROVED' | 'REJECTED' | 'IMPLEMENTED' | string;
+  priority?: 'LOW' | 'NORMAL' | 'HIGH' | 'URGENT' | string;
+  createdAt?: string;
+  requesterId?: string;
+  requester?: {
+    fullName?: string;
+    department?: string;
+    email?: string;
+  } | null;
+  justification?: string | null;
+  adminNotes?: string | null;
+  category?: string | null;
 };
 
-function formatDate(value?: string) {
+type AttachmentPayload = {
+  filename?: string;
+  name?: string;
+  contentType?: string;
+  type?: string;
+  base64Content?: string;
+  base64?: string;
+  data?: string;
+};
+
+type DisplayRow = {
+  id: string;
+  rowType: 'suggestion' | 'purchase';
+  code: string;
+  title: string;
+  description: string;
+  status: string;
+  priority: string;
+  createdAt?: string;
+  requesterName: string;
+  requesterDepartment: string;
+  requesterEmail: string;
+  location: string;
+  sourcePurpose: string;
+  noteReason: string;
+  notesCount: number;
+  attachments: AttachmentPayload[];
+  adminNotes: string;
+};
+
+function formatDate(value?: string | null) {
   if (!value) return '—';
   try {
     return new Intl.DateTimeFormat('ar-SA', {
       year: 'numeric',
-      month: 'long',
+      month: 'short',
       day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
     }).format(new Date(value));
   } catch {
-    return value;
+    return '—';
   }
 }
 
-function normalizeStatus(value?: string) {
-  if (!value) return 'PENDING';
-  return value.toUpperCase();
+function normalizeArabic(value: string) {
+  return (value || '')
+    .toLowerCase()
+    .trim()
+    .replace(/[أإآ]/g, 'ا')
+    .replace(/ة/g, 'ه')
+    .replace(/ى/g, 'ي')
+    .replace(/ؤ/g, 'و')
+    .replace(/ئ/g, 'ي')
+    .replace(/ء/g, '')
+    .replace(/\s+/g, ' ');
 }
 
-function mapSuggestion(item: any): PurchaseRequest {
-  return {
-    id: item.id,
-    code: item.code,
-    title: item.title || 'طلب شراء مباشر',
-    itemName: item.areaLabel || item.relatedItemName || '—',
-    areaLabel: item.areaLabel || item.relatedItemName || '—',
-    note: item.note || item.description || '—',
-    requesterName: item.requesterName || item.createdBy?.name || '—',
-    requesterEmail: item.requesterEmail || item.createdBy?.email || '—',
-    sourcePurpose: item.sourcePurpose || '—',
-    status: normalizeStatus(item.status),
-    createdAt: item.createdAt,
-    type: 'suggestion',
-  };
+function parseJustification(value?: string | null) {
+  try {
+    const parsed = JSON.parse(value || '{}');
+    const attachments = Array.isArray(parsed?.attachments) ? parsed.attachments : [];
+    return {
+      location: String(parsed?.location || '').trim(),
+      sourcePurpose: String(
+        parsed?.requestSource || parsed?.programName || parsed?.area || parsed?.sourcePurpose || ''
+      ).trim(),
+      rawJustification: String(parsed?.rawJustification || '').trim(),
+      attachments,
+    };
+  } catch {
+    return {
+      location: '',
+      sourcePurpose: '',
+      rawJustification: '',
+      attachments: [] as AttachmentPayload[],
+    };
+  }
 }
 
-function mapLegacy(item: any): PurchaseRequest {
-  return {
-    id: item.id,
-    code: item.code || item.requestCode || item.id,
-    title: item.title || 'طلب شراء مباشر',
-    itemName: item.itemName || item.name || item.title || '—',
-    areaLabel: item.location || item.areaLabel || item.itemName || '—',
-    note: item.note || item.justification || item.description || '—',
-    requesterName: item.requesterName || item.createdBy?.name || '—',
-    requesterEmail: item.requesterEmail || item.createdBy?.email || '—',
-    sourcePurpose: item.sourcePurpose || '—',
-    status: normalizeStatus(item.status),
-    createdAt: item.createdAt,
-    type: 'legacy',
-  };
+function statusMeta(value: string) {
+  const raw = String(value || '').toUpperCase();
+  if (raw === 'PENDING') return { label: 'بانتظار الاعتماد', variant: 'warning' as const };
+  if (raw === 'APPROVED') return { label: 'معتمد', variant: 'success' as const };
+  if (raw === 'IMPLEMENTED') return { label: 'تم إنشاء المسودة', variant: 'success' as const };
+  if (raw === 'ORDERED') return { label: 'تم الرفع', variant: 'info' as const };
+  if (raw === 'RECEIVED') return { label: 'تم الاستلام', variant: 'success' as const };
+  if (raw === 'REJECTED') return { label: 'مرفوض', variant: 'danger' as const };
+  return { label: '—', variant: 'neutral' as const };
+}
+
+function priorityMeta(value: string) {
+  const raw = String(value || '').toUpperCase();
+  if (raw === 'URGENT') return { label: 'عاجل', variant: 'danger' as const };
+  if (raw === 'HIGH') return { label: 'عالٍ', variant: 'warning' as const };
+  if (raw === 'NORMAL') return { label: 'عادي', variant: 'info' as const };
+  if (raw === 'LOW') return { label: 'منخفض', variant: 'neutral' as const };
+  return { label: 'عادي', variant: 'info' as const };
 }
 
 export default function PurchasesPage() {
-  const [items, setItems] = useState<PurchaseRequest[]>([]);
+  const { user } = useAuth();
+  const [rows, setRows] = useState<DisplayRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState('ALL');
+  const [selected, setSelected] = useState<DisplayRow | null>(null);
+  const [adminNotes, setAdminNotes] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [feedback, setFeedback] = useState('');
+
+  const isManager = user?.role === 'manager';
+
+  async function fetchRows() {
+    setLoading(true);
+    try {
+      const [suggestionsRes, purchasesRes] = await Promise.all([
+        fetch('/api/suggestions?category=PURCHASE', { cache: 'no-store' }),
+        fetch('/api/purchases', { cache: 'no-store' }).catch(() => null),
+      ]);
+
+      const suggestionsJson = await suggestionsRes.json().catch(() => null);
+      const purchasesJson = purchasesRes ? await purchasesRes.json().catch(() => null) : null;
+
+      const suggestionRows: DisplayRow[] = Array.isArray(suggestionsJson?.data)
+        ? suggestionsJson.data.map((row: SuggestionRow) => {
+            const parsed = parseJustification(row.justification);
+            return {
+              id: row.id,
+              rowType: 'suggestion',
+              code: row.code || `PUR-REQ-${String(row.id).slice(-6).toUpperCase()}`,
+              title: row.title || 'طلب شراء مباشر',
+              description: row.description || '—',
+              status: String(row.status || ''),
+              priority: String(row.priority || 'NORMAL'),
+              createdAt: row.createdAt,
+              requesterName: row.requester?.fullName || '—',
+              requesterDepartment: row.requester?.department || '—',
+              requesterEmail: row.requester?.email || '',
+              location: parsed.location || '—',
+              sourcePurpose: parsed.sourcePurpose || '—',
+              noteReason: parsed.rawJustification || '—',
+              notesCount: Math.max(parsed.attachments.length, 1),
+              attachments: parsed.attachments,
+              adminNotes: row.adminNotes || '',
+            };
+          })
+        : [];
+
+      const purchaseRows: DisplayRow[] = Array.isArray(purchasesJson?.data)
+        ? purchasesJson.data.map((row: PurchaseApiRow) => ({
+            id: row.id,
+            rowType: 'purchase',
+            code: row.code,
+            title: 'طلب شراء مباشر',
+            description: row.reason || row.items || '—',
+            status: String(row.status || ''),
+            priority: 'NORMAL',
+            createdAt: row.createdAt,
+            requesterName: '—',
+            requesterDepartment: '—',
+            requesterEmail: '',
+            location: '—',
+            sourcePurpose: '—',
+            noteReason: row.budgetNote || '—',
+            notesCount: 1,
+            attachments: [],
+            adminNotes: '',
+          }))
+        : [];
+
+      const merged = [...suggestionRows, ...purchaseRows].sort((a, b) => {
+        const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return bTime - aTime;
+      });
+
+      setRows(merged);
+    } catch {
+      setRows([]);
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
-    let mounted = true;
-
-    async function load() {
-      setLoading(true);
-      try {
-        const [legacyRes, suggestionsRes] = await Promise.all([
-          fetch('/api/purchases', { cache: 'no-store' }),
-          fetch('/api/suggestions?category=PURCHASE', { cache: 'no-store' }),
-        ]);
-
-        const legacyJson = legacyRes.ok ? await legacyRes.json() : [];
-        const suggestionsJson = suggestionsRes.ok ? await suggestionsRes.json() : [];
-
-        const legacyItems = Array.isArray(legacyJson)
-          ? legacyJson.map(mapLegacy)
-          : Array.isArray(legacyJson?.data)
-          ? legacyJson.data.map(mapLegacy)
-          : [];
-
-        const suggestionItems = Array.isArray(suggestionsJson)
-          ? suggestionsJson.map(mapSuggestion)
-          : Array.isArray(suggestionsJson?.data)
-          ? suggestionsJson.data.map(mapSuggestion)
-          : [];
-
-        const merged = [...suggestionItems, ...legacyItems].sort((a, b) => {
-          const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-          const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-          return bTime - aTime;
-        });
-
-        if (mounted) setItems(merged);
-      } catch {
-        if (mounted) setItems([]);
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    }
-
-    load();
-    return () => {
-      mounted = false;
-    };
+    fetchRows();
   }, []);
-
-  const filtered = useMemo(() => {
-    return items.filter((item) => {
-      const matchesStatus = statusFilter === 'ALL' || normalizeStatus(item.status) === statusFilter;
-      const haystack = [
-        item.code,
-        item.title,
-        item.itemName,
-        item.areaLabel,
-        item.note,
-        item.requesterName,
-      ]
-        .join(' ')
-        .toLowerCase();
-      const matchesSearch = !search.trim() || haystack.includes(search.trim().toLowerCase());
-      return matchesStatus && matchesSearch;
-    });
-  }, [items, search, statusFilter]);
 
   const stats = useMemo(() => {
     return {
-      total: items.length,
-      open: items.filter((item) => ['PENDING', 'PENDING_APPROVAL', 'OPEN', 'APPROVED'].includes(normalizeStatus(item.status))).length,
-      processing: items.filter((item) => normalizeStatus(item.status) === 'IN_PROGRESS').length,
-      closed: items.filter((item) => ['CLOSED', 'REJECTED'].includes(normalizeStatus(item.status))).length,
+      total: rows.length,
+      pending: rows.filter((row) => row.rowType === 'suggestion' && row.status === 'PENDING').length,
+      approved: rows.filter((row) => row.status === 'APPROVED' || row.status === 'IMPLEMENTED' || row.status === 'ORDERED').length,
+      rejected: rows.filter((row) => row.status === 'REJECTED').length,
     };
-  }, [items]);
+  }, [rows]);
+
+  const filteredRows = useMemo(() => {
+    const q = normalizeArabic(search);
+    return rows.filter((row) => {
+      const text = normalizeArabic(
+        [
+          row.code,
+          row.title,
+          row.description,
+          row.requesterName,
+          row.requesterDepartment,
+          row.requesterEmail,
+          row.location,
+          row.sourcePurpose,
+          row.noteReason,
+        ]
+          .filter(Boolean)
+          .join(' ')
+      );
+      return q ? text.includes(q) : true;
+    });
+  }, [rows, search]);
+
+  const canModerate = selected?.rowType === 'suggestion' && selected?.status === 'PENDING' && isManager;
+
+  async function handleAction(action: 'approve' | 'reject') {
+    if (!selected || selected.rowType !== 'suggestion') return;
+
+    setSubmitting(true);
+    setFeedback('');
+
+    try {
+      const res = await fetch('/api/suggestions', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          suggestionId: selected.id,
+          action,
+          adminNotes,
+          targetDepartment: 'PROCUREMENT',
+        }),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        throw new Error(data?.error || 'تعذر تنفيذ الإجراء');
+      }
+
+      setFeedback(
+        action === 'approve'
+          ? 'تم اعتماد طلب الشراء وإنشاء مسودة الرفع في المراسلات الخارجية.'
+          : 'تم رفض الطلب بنجاح.'
+      );
+
+      await fetchRows();
+
+      if (action === 'approve') {
+        setTimeout(() => {
+          window.location.href = '/email-drafts';
+        }, 800);
+      } else {
+        setTimeout(() => {
+          setSelected(null);
+          setAdminNotes('');
+          setFeedback('');
+        }, 800);
+      }
+    } catch (error: any) {
+      setFeedback(error?.message || 'تعذر تنفيذ الإجراء');
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  if (!isManager) {
+    return (
+      <div className="rounded-[22px] border border-red-200 bg-red-50 p-6 text-center text-red-700 sm:rounded-[26px]">
+        غير مصرح لك بالوصول لهذه الصفحة
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-6" dir="rtl">
-      <section className="rounded-[32px] border border-[#d6d7d4] bg-white p-6 shadow-sm">
-        <div className="mb-6 flex items-start justify-between gap-4">
-          <div>
-            <h1 className="text-4xl font-bold text-[#1f4f4e]">الشراء المباشر</h1>
-            <p className="mt-3 text-lg text-[#6b7280]">متابعة طلبات الشراء المباشر الواردة من الموظفين والمرتبطة بالبيئة التشغيلية.</p>
-          </div>
+    <div className="space-y-4 sm:space-y-5">
+      <section className="rounded-[24px] border border-[#d6d7d4] bg-white px-4 py-4 shadow-sm sm:rounded-[28px] sm:px-5 sm:py-5">
+        <div className="space-y-2">
+          <h1 className="text-[24px] font-extrabold leading-[1.25] text-[#016564] sm:text-[30px]">
+            الشراء المباشر
+          </h1>
+          <p className="text-[13px] leading-7 text-[#61706f] sm:text-sm">
+            دورة طلب الشراء كاملة من المراجعة والاعتماد حتى إنشاء مسودة الرفع الموجهة إلى نواف المحارب ثم تنزيلها من المراسلات الخارجية.
+          </p>
         </div>
 
-        <div className="grid gap-4 md:grid-cols-4">
-          <div className="rounded-2xl border border-[#d6d7d4] p-5">
-            <div className="text-sm text-[#7b8088]">إجمالي الطلبات</div>
-            <div className="mt-3 text-4xl font-bold text-[#1f4f4e]">{stats.total}</div>
-          </div>
-          <div className="rounded-2xl border border-[#d6d7d4] p-5">
-            <div className="text-sm text-[#7b8088]">المفتوحة</div>
-            <div className="mt-3 text-4xl font-bold text-[#1f4f4e]">{stats.open}</div>
-          </div>
-          <div className="rounded-2xl border border-[#d6d7d4] p-5">
-            <div className="text-sm text-[#7b8088]">قيد المعالجة</div>
-            <div className="mt-3 text-4xl font-bold text-[#1f4f4e]">{stats.processing}</div>
-          </div>
-          <div className="rounded-2xl border border-[#d6d7d4] p-5">
-            <div className="text-sm text-[#7b8088]">المغلقة</div>
-            <div className="mt-3 text-4xl font-bold text-[#1f4f4e]">{stats.closed}</div>
-          </div>
-        </div>
-      </section>
-
-      <section className="rounded-[32px] border border-[#d6d7d4] bg-white p-6 shadow-sm">
-        <div className="grid gap-4 md:grid-cols-[220px_1fr]">
-          <div>
-            <label className="mb-2 block text-sm font-semibold text-[#4b5563]">الحالة</label>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="h-14 w-full rounded-2xl border border-[#d6d7d4] bg-white px-4 text-base outline-none"
-            >
-              <option value="ALL">الكل</option>
-              <option value="PENDING">بانتظار المدير</option>
-              <option value="APPROVED">تم الاعتماد</option>
-              <option value="IN_PROGRESS">قيد المعالجة</option>
-              <option value="REJECTED">مرفوض</option>
-              <option value="CLOSED">مغلق</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="mb-2 block text-sm font-semibold text-[#4b5563]">بحث</label>
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="الرمز، العنوان، اسم مقدم الطلب، العنصر"
-              className="h-14 w-full rounded-2xl border border-[#d6d7d4] bg-white px-4 text-base outline-none"
-            />
-          </div>
+        <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
+          <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none sm:rounded-2xl">
+            <div className="text-[12px] text-[#6f7b7a]">إجمالي الطلبات</div>
+            <div className="mt-1 text-[22px] font-extrabold leading-none text-[#016564] sm:text-xl">{stats.total}</div>
+          </Card>
+          <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none sm:rounded-2xl">
+            <div className="text-[12px] text-[#6f7b7a]">بانتظار الاعتماد</div>
+            <div className="mt-1 text-[22px] font-extrabold leading-none text-[#d0b284] sm:text-xl">{stats.pending}</div>
+          </Card>
+          <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none sm:rounded-2xl">
+            <div className="text-[12px] text-[#6f7b7a]">المعتمدة / المحالة</div>
+            <div className="mt-1 text-[22px] font-extrabold leading-none text-[#498983] sm:text-xl">{stats.approved}</div>
+          </Card>
+          <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none sm:rounded-2xl">
+            <div className="text-[12px] text-[#6f7b7a]">المرفوضة</div>
+            <div className="mt-1 text-[22px] font-extrabold leading-none text-[#7c1e3e] sm:text-xl">{stats.rejected}</div>
+          </Card>
         </div>
       </section>
 
-      <section className="space-y-4 rounded-[32px] border border-[#d6d7d4] bg-white p-6 shadow-sm">
+      <section className="rounded-[24px] border border-[#d6d7d4] bg-white p-4 shadow-sm sm:rounded-[28px] sm:p-5">
+        <Input
+          label="بحث"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="رقم الطلب، مقدم الطلب، الموقع، أو سبب الشراء"
+        />
+      </section>
+
+      <section className="space-y-3">
         {loading ? (
-          <div className="rounded-2xl border border-dashed border-[#d6d7d4] p-10 text-center text-[#6b7280]">جارٍ تحميل الطلبات...</div>
-        ) : filtered.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-[#d6d7d4] p-10 text-center text-[#6b7280]">لا توجد طلبات شراء مباشرة مطابقة</div>
+          <div className="space-y-3">
+            {[1, 2, 3].map((item) => (
+              <Skeleton key={item} className="h-32 w-full rounded-[24px] sm:rounded-3xl" />
+            ))}
+          </div>
+        ) : filteredRows.length === 0 ? (
+          <Card className="rounded-[24px] border border-[#d6d7d4] p-8 text-center text-sm text-[#61706f] shadow-sm sm:rounded-[28px]">
+            لا توجد طلبات شراء مباشرة حالية
+          </Card>
         ) : (
-          filtered.map((item) => (
-            <div key={`${item.type}-${item.id}`} className="rounded-3xl border border-[#e5e7eb] p-5">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="rounded-full bg-[#eef6f5] px-3 py-1 text-sm font-bold text-[#1f4f4e]">{item.code || item.id}</span>
-                  <span className="rounded-full bg-[#f6efe2] px-3 py-1 text-sm font-semibold text-[#8a6a23]">
-                    {STATUS_LABELS[normalizeStatus(item.status)] || item.status || '—'}
-                  </span>
-                  <span className="rounded-full bg-[#f5f5f5] px-3 py-1 text-sm text-[#6b7280]">
-                    {item.type === 'suggestion' ? 'من الطلبات التشغيلية الجديدة' : 'من الشراء المباشر'}
-                  </span>
-                </div>
-                <div className="text-sm text-[#6b7280]">{formatDate(item.createdAt)}</div>
-              </div>
+          filteredRows.map((row) => {
+            const status = statusMeta(row.status);
+            const priority = priorityMeta(row.priority);
 
-              <h3 className="mt-4 text-2xl font-bold text-[#1f2937]">{item.title || 'طلب شراء مباشر'}</h3>
+            return (
+              <Card
+                key={`${row.rowType}-${row.id}`}
+                className="rounded-[24px] border border-[#d6d7d4] p-4 shadow-sm sm:rounded-[28px] sm:p-5"
+              >
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0 space-y-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="break-all font-mono text-sm font-bold text-[#016564]">{row.code}</div>
+                      <Badge variant={status.variant}>{status.label}</Badge>
+                      <Badge variant={priority.variant}>{priority.label}</Badge>
+                      {row.rowType === 'suggestion' ? <Badge variant="info">طلب مرفوع</Badge> : <Badge variant="success">تمت الإحالة</Badge>}
+                    </div>
 
-              <div className="mt-4 grid gap-4 md:grid-cols-2">
-                <div>
-                  <div className="text-sm text-[#7b8088]">العنصر / المجال</div>
-                  <div className="mt-1 text-base font-semibold text-[#111827]">{item.areaLabel || item.itemName || '—'}</div>
-                </div>
-                <div>
-                  <div className="text-sm text-[#7b8088]">مصدر الحاجة</div>
-                  <div className="mt-1 text-base font-semibold text-[#111827]">{item.sourcePurpose || '—'}</div>
-                </div>
-                <div>
-                  <div className="text-sm text-[#7b8088]">مقدم الطلب</div>
-                  <div className="mt-1 text-base font-semibold text-[#111827]">{item.requesterName || '—'}</div>
-                </div>
-                <div>
-                  <div className="text-sm text-[#7b8088]">البريد الإلكتروني</div>
-                  <div className="mt-1 text-base font-semibold text-[#111827]">{item.requesterEmail || '—'}</div>
-                </div>
-              </div>
+                    <div className="break-words text-[15px] font-bold leading-7 text-[#152625] sm:text-base">
+                      {row.title}
+                    </div>
 
-              <div className="mt-4 rounded-2xl bg-[#fafafa] p-4 text-[#374151]">
-                <div className="mb-1 text-sm text-[#7b8088]">الوصف</div>
-                <div className="whitespace-pre-wrap text-base">{item.note || '—'}</div>
-              </div>
-            </div>
-          ))
+                    <div className="break-words text-sm leading-7 text-[#304342]">{row.description}</div>
+
+                    <div className="grid gap-2 text-[12px] text-[#61706f] sm:grid-cols-2 sm:text-xs">
+                      <div>التاريخ: {formatDate(row.createdAt)}</div>
+                      <div className="break-words">مقدم الطلب: {row.requesterName}</div>
+                      <div className="break-words">الإدارة: {row.requesterDepartment}</div>
+                      <div className="break-words">الموقع: {row.location}</div>
+                    </div>
+                  </div>
+
+                  <div className="flex w-full flex-col gap-2 sm:w-auto">
+                    <Button
+                      className="w-full sm:w-auto"
+                      onClick={() => {
+                        setSelected(row);
+                        setAdminNotes('');
+                        setFeedback('');
+                      }}
+                    >
+                      فتح التفاصيل
+                    </Button>
+                  </div>
+                </div>
+              </Card>
+            );
+          })
         )}
       </section>
+
+      <Modal
+        isOpen={!!selected}
+        onClose={() => {
+          setSelected(null);
+          setAdminNotes('');
+          setFeedback('');
+        }}
+        title={selected ? `تفاصيل طلب الشراء ${selected.code}` : 'تفاصيل طلب الشراء'}
+      >
+        {selected ? (
+          <div className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl">
+                <div className="text-xs font-bold text-[#016564]">التاريخ</div>
+                <div className="mt-1 text-sm leading-7 text-[#304342]">{formatDate(selected.createdAt)}</div>
+              </div>
+              <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl">
+                <div className="text-xs font-bold text-[#016564]">الأولوية</div>
+                <div className="mt-1 text-sm leading-7 text-[#304342]">{priorityMeta(selected.priority).label}</div>
+              </div>
+              <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl">
+                <div className="text-xs font-bold text-[#016564]">الموقع</div>
+                <div className="mt-1 break-words text-sm leading-7 text-[#304342]">{selected.location}</div>
+              </div>
+              <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl">
+                <div className="text-xs font-bold text-[#016564]">مقدم الطلب</div>
+                <div className="mt-1 break-words text-sm leading-7 text-[#304342]">{selected.requesterName}</div>
+              </div>
+              <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:col-span-2 sm:rounded-2xl">
+                <div className="text-xs font-bold text-[#016564]">حيثيات الطلب</div>
+                <div className="mt-1 break-words text-sm leading-7 text-[#304342]">{selected.sourcePurpose}</div>
+              </div>
+              <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:col-span-2 sm:rounded-2xl">
+                <div className="text-xs font-bold text-[#016564]">السبب / الملاحظة</div>
+                <div className="mt-1 break-words text-sm leading-7 text-[#304342]">{selected.noteReason}</div>
+              </div>
+              <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:col-span-2 sm:rounded-2xl">
+                <div className="text-xs font-bold text-[#016564]">التفاصيل</div>
+                <div className="mt-1 break-words text-sm leading-7 text-[#304342]">{selected.description}</div>
+              </div>
+            </div>
+
+            {canModerate ? (
+              <div className="space-y-3 rounded-[18px] border border-[#e7ebea] bg-[#fafcfc] p-4 sm:rounded-2xl">
+                <Input
+                  label="ملاحظة المدير"
+                  value={adminNotes}
+                  onChange={(e) => setAdminNotes(e.target.value)}
+                  placeholder="ملاحظة داخلية تظهر مع الرفع أو الرفض"
+                />
+
+                {feedback ? (
+                  <div className="rounded-2xl border border-[#d6e4e2] bg-white px-4 py-3 text-sm leading-7 text-[#304342]">
+                    {feedback}
+                  </div>
+                ) : null}
+
+                <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+                  <Button variant="ghost" onClick={() => handleAction('reject')} disabled={submitting} className="w-full sm:w-auto">
+                    رفض
+                  </Button>
+                  <Button onClick={() => handleAction('approve')} disabled={submitting} className="w-full sm:w-auto">
+                    اعتماد وإنشاء مسودة
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
+            {selected.rowType === 'purchase' ? (
+              <div className="rounded-2xl border border-[#d6e4e2] bg-white px-4 py-3 text-sm leading-7 text-[#304342]">
+                هذا الطلب معتمد بالفعل، ويمكن متابعة تنزيل البريد من صفحة المراسلات الخارجية.
+              </div>
+            ) : null}
+
+            <div className="flex justify-end">
+              <Button
+                variant="ghost"
+                onClick={() => {
+                  setSelected(null);
+                  setAdminNotes('');
+                  setFeedback('');
+                }}
+                className="w-full sm:w-auto"
+              >
+                إغلاق
+              </Button>
+            </div>
+          </div>
+        ) : null}
+      </Modal>
     </div>
   );
 }
