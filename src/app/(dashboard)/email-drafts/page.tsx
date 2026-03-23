@@ -61,6 +61,7 @@ export default function EmailDraftsPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<EmailDraftRow | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
 
   const isManager = user?.role === 'manager';
 
@@ -110,6 +111,37 @@ export default function EmailDraftsPage() {
       sent: rows.filter((row) => row.status === 'SENT').length,
     };
   }, [rows]);
+
+  async function handleDownload(id: string) {
+    try {
+      setDownloadingId(id);
+      const res = await fetch(`/api/email-drafts/${id}/download`, {
+        method: 'GET',
+      });
+
+      if (!res.ok) {
+        throw new Error('DOWNLOAD_FAILED');
+      }
+
+      const blob = await res.blob();
+      const contentDisposition = res.headers.get('content-disposition') || '';
+      const match = contentDisposition.match(/filename\*=UTF-8''([^;]+)|filename="?([^";]+)"?/i);
+      const filename = decodeURIComponent(match?.[1] || match?.[2] || `${id}.eml`);
+
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch {
+      window.alert('تعذر تنزيل ملف المراسلة حالياً');
+    } finally {
+      setDownloadingId(null);
+    }
+  }
 
   if (!isManager) {
     return (
@@ -185,6 +217,7 @@ export default function EmailDraftsPage() {
         ) : (
           filteredRows.map((row) => {
             const status = statusMeta(row.status);
+            const isDownloading = downloadingId === row.id;
 
             return (
               <Card
@@ -217,6 +250,14 @@ export default function EmailDraftsPage() {
                   <div className="flex w-full flex-col gap-2 sm:w-auto">
                     <Button className="w-full sm:w-auto" onClick={() => setSelected(row)}>
                       فتح التفاصيل
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="w-full sm:w-auto"
+                      onClick={() => handleDownload(row.id)}
+                      disabled={isDownloading}
+                    >
+                      {isDownloading ? 'جاري التنزيل...' : 'تنزيل .eml'}
                     </Button>
                   </div>
                 </div>
@@ -291,7 +332,14 @@ export default function EmailDraftsPage() {
               </div>
             </div>
 
-            <div className="flex justify-end">
+            <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
+              <Button
+                className="w-full sm:w-auto"
+                onClick={() => handleDownload(selected.id)}
+                disabled={downloadingId === selected.id}
+              >
+                {downloadingId === selected.id ? 'جاري التنزيل...' : 'تنزيل .eml'}
+              </Button>
               <Button variant="ghost" onClick={() => setSelected(null)} className="w-full sm:w-auto">
                 إغلاق
               </Button>
