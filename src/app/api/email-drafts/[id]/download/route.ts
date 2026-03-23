@@ -7,27 +7,31 @@ function sanitizeHeader(value?: string | null) {
   return String(value || '').replace(/\r/g, ' ').replace(/\n/g, ' ').trim();
 }
 
-function buildEml(params: {
+function buildDraftEml(params: {
   to: string;
+  cc?: string | null;
   subject: string;
   htmlBody: string;
 }) {
   const boundary = `----=_Part_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   const to = sanitizeHeader(params.to);
+  const cc = sanitizeHeader(params.cc || '');
   const subject = sanitizeHeader(params.subject);
   const htmlBody = params.htmlBody || '<div dir="rtl">—</div>';
 
   return [
     `To: ${to}`,
+    cc ? `Cc: ${cc}` : '',
     `Subject: ${subject}`,
     'MIME-Version: 1.0',
+    'X-Unsent: 1',
     `Content-Type: multipart/alternative; boundary="${boundary}"`,
     '',
     `--${boundary}`,
     'Content-Type: text/plain; charset=UTF-8',
     'Content-Transfer-Encoding: 8bit',
     '',
-    'يرجى فتح هذه الرسالة في عميل بريد يدعم HTML.',
+    'يرجى فتح هذه المسودة في Outlook أو عميل بريد يدعم HTML.',
     '',
     `--${boundary}`,
     'Content-Type: text/html; charset=UTF-8',
@@ -37,7 +41,7 @@ function buildEml(params: {
     '',
     `--${boundary}--`,
     '',
-  ].join('\r\n');
+  ].filter(Boolean).join('\r\n');
 }
 
 export async function GET(
@@ -55,8 +59,9 @@ export async function GET(
       return NextResponse.json({ error: 'مسودة البريد غير موجودة' }, { status: 404 });
     }
 
-    const eml = buildEml({
+    const eml = buildDraftEml({
       to: draft.recipient,
+      cc: null,
       subject: draft.subject,
       htmlBody: draft.body || '<div dir="rtl">—</div>',
     });

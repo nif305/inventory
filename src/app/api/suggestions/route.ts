@@ -147,16 +147,22 @@ function formatDateTime(value: Date | string) {
   return { date, time };
 }
 
-function buildDetailsTable(rows: Array<[string, string]>) {
+function buildMemoTable(rows: Array<Array<[string, string]>>) {
   return `
 <table dir="rtl" style="width:100%;border-collapse:collapse;font-family:Tahoma,Arial,sans-serif;font-size:14px">
   <tbody>
     ${rows
       .map(
-        ([label, value]) => `
+        (row) => `
       <tr>
-        <td style="width:220px;border:1px solid #d6d7d4;background:#f8f9f9;padding:10px;font-weight:bold;color:#1f3d3c">${escapeHtml(label)}</td>
-        <td style="border:1px solid #d6d7d4;padding:10px;color:#304342">${escapeHtml(value)}</td>
+        ${row
+          .map(
+            ([label, value]) => `
+          <td style="width:${row.length === 1 ? '22%' : '16%'};border:1px solid #d6d7d4;background:#f8f9f9;padding:10px;font-weight:bold;color:#1f3d3c">${escapeHtml(label)}</td>
+          <td style="width:${row.length === 1 ? '78%' : '17%'};border:1px solid #d6d7d4;padding:10px;color:#304342">${escapeHtml(value)}</td>
+          `
+          )
+          .join('')}
       </tr>`
       )
       .join('')}
@@ -165,8 +171,7 @@ function buildDetailsTable(rows: Array<[string, string]>) {
   `.trim();
 }
 
-function buildMemoBody(params: {
-  subjectTitle: string;
+function buildSupportMemoBody(params: {
   requestCode: string;
   createdAt: Date | string;
   requestTypeLabel: string;
@@ -174,8 +179,7 @@ function buildMemoBody(params: {
   requesterDepartment: string;
   requesterEmail: string;
   location: string;
-  itemName: string;
-  quantity: string;
+  notesCount: string;
   description: string;
   sourcePurpose: string;
   justification: string;
@@ -183,56 +187,152 @@ function buildMemoBody(params: {
 }) {
   const { date, time } = formatDateTime(params.createdAt);
 
-  const table = buildDetailsTable([
-    ['رقم الطلب', params.requestCode],
-    ['تاريخ الطلب', date],
-    ['وقت الطلب', time],
-    ['نوع الطلب', params.requestTypeLabel],
-    ['مقدم الطلب', params.requesterName],
-    ['الإدارة', params.requesterDepartment],
-    ['البريد الإلكتروني', params.requesterEmail],
-    ['الموقع', params.location],
-    ['العنصر/الجزء', params.itemName],
-    ['الكمية', params.quantity],
-    ['التفاصيل', params.description],
-    ['حيثيات الطلب', params.sourcePurpose],
-    ['السبب/الملاحظة', params.justification],
-    ['ملاحظة المدير', params.adminNotes],
+  const table = buildMemoTable([
+    [
+      ['رقم الطلب', params.requestCode],
+      ['تاريخ الطلب', date],
+      ['وقت الطلب', time],
+    ],
+    [['نوع الطلب', params.requestTypeLabel]],
+    [
+      ['مقدم الطلب', params.requesterName],
+      ['الإدارة', params.requesterDepartment],
+      ['البريد الإلكتروني', params.requesterEmail],
+    ],
+    [
+      ['الموقع', params.location],
+      ['عدد الملاحظات', params.notesCount],
+    ],
+    [['التفاصيل', params.description]],
+    [['حيثيات الطلب', params.sourcePurpose]],
+    [['السبب/ الملاحظة', params.justification]],
+    [['ملاحظة المدير', params.adminNotes]],
   ]);
 
   return `
 <div dir="rtl" style="font-family:Tahoma,Arial,sans-serif;line-height:1.95;color:#152625">
-  <p style="margin:0 0 16px 0">السلام عليكم ورحمة الله وبركاته،</p>
+  <p style="margin:0 0 12px 0">الأخوة في إدارة الخدمات المساندة سلّمهم الله</p>
+  <p style="margin:0 0 12px 0">السلام عليكم ورحمة الله وبركاته،،</p>
   <p style="margin:0 0 16px 0">
-    نفيدكم بورود <strong>${escapeHtml(params.requestTypeLabel)}</strong> عبر منصة مواد التدريب بوكالة التدريب، ونأمل التكرم بالاطلاع واتخاذ ما يلزم وفق البيانات الواردة أدناه.
+    تهديكم إدارة عمليات التدريب أطيب التحايا، وبالإشارة إلى بعض الملاحظات الفنية التي وردتنا، والتي تستلزم التدخل والمعالجة، نفيدكم بها حسب البيان التالي:
   </p>
   <div style="margin:0 0 18px 0">${table}</div>
-  <p style="margin:0 0 8px 0">وتفضلوا بقبول خالص التقدير،</p>
-  <p style="margin:0">إدارة عمليات التدريب</p>
+  <p style="margin:0 0 8px 0">نأمل منكم التكرم بمعالجة المشكلة في أقرب وقت ممكن، أو التوجيه لمن يلزم باتخاذ الإجراء المناسب.</p>
+  <p style="margin:0">فريق إدارة عمليات التدريب</p>
   <p style="margin:0">وكالة التدريب</p>
 </div>
   `.trim();
 }
 
-function supportRecipients(category: string, requesterEmail: string) {
-  const base =
-    category === 'CLEANING'
-      ? ['ssd@nauss.edu.sa', 'AAlosaimi@nauss.edu.sa', requesterEmail]
-      : ['ssd@nauss.edu.sa', 'AAlosaimi@nauss.edu.sa', requesterEmail];
+function buildPurchaseMemoBody(params: {
+  requestCode: string;
+  createdAt: Date | string;
+  requesterName: string;
+  requesterDepartment: string;
+  requesterEmail: string;
+  location: string;
+  notesCount: string;
+  description: string;
+  sourcePurpose: string;
+  justification: string;
+  adminNotes: string;
+}) {
+  const { date, time } = formatDateTime(params.createdAt);
 
-  return base.filter(Boolean).join(', ');
+  const table = buildMemoTable([
+    [
+      ['رقم الطلب', params.requestCode],
+      ['تاريخ الطلب', date],
+      ['وقت الطلب', time],
+    ],
+    [['نوع الطلب', 'طلب شراء مباشر']],
+    [
+      ['مقدم الطلب', params.requesterName],
+      ['الإدارة', params.requesterDepartment],
+      ['البريد الإلكتروني', params.requesterEmail],
+    ],
+    [
+      ['الموقع', params.location],
+      ['عدد الملاحظات', params.notesCount],
+    ],
+    [['التفاصيل', params.description]],
+    [['حيثيات الطلب', params.sourcePurpose]],
+    [['السبب/ الملاحظة', params.justification]],
+    [['ملاحظة المدير', params.adminNotes]],
+  ]);
+
+  return `
+<div dir="rtl" style="font-family:Tahoma,Arial,sans-serif;line-height:1.95;color:#152625">
+  <p style="margin:0 0 12px 0">الأخ / نواف المحارب سلّمه الله</p>
+  <p style="margin:0 0 12px 0">السلام عليكم ورحمة الله وبركاته،،</p>
+  <p style="margin:0 0 16px 0">
+    آمل منكم التكرم برفع طلب المشتريات المذكورة أدناه في نظام ERP، وإحالته إلى إدارة المشتريات لتوفير المواد المطلوبة، وذلك حسب البيان التالي:
+  </p>
+  <div style="margin:0 0 18px 0">${table}</div>
+  <p style="margin:0 0 8px 0">شاكرين لكم تعاونكم، وآمل التكرم باتخاذ ما يلزم حيال ذلك.</p>
+  <p style="margin:0">فريق إدارة عمليات التدريب</p>
+  <p style="margin:0">وكالة التدريب</p>
+</div>
+  `.trim();
 }
 
-function purchaseRecipients(requesterEmail: string) {
-  return [
-    'finance@nauss.edu.sa',
-    'aalaraj@nauss.edu.sa',
-    'YAlqaoud@nauss.edu.sa',
-    'Procurement@nauss.edu.sa',
-    requesterEmail,
-  ]
-    .filter(Boolean)
-    .join(', ');
+function buildOtherMemoBody(params: {
+  requestCode: string;
+  createdAt: Date | string;
+  requesterName: string;
+  requesterDepartment: string;
+  requesterEmail: string;
+  location: string;
+  notesCount: string;
+  description: string;
+  sourcePurpose: string;
+  justification: string;
+  adminNotes: string;
+}) {
+  const { date, time } = formatDateTime(params.createdAt);
+
+  const table = buildMemoTable([
+    [
+      ['رقم الطلب', params.requestCode],
+      ['تاريخ الطلب', date],
+      ['وقت الطلب', time],
+    ],
+    [['نوع الطلب', 'طلب آخر']],
+    [
+      ['مقدم الطلب', params.requesterName],
+      ['الإدارة', params.requesterDepartment],
+      ['البريد الإلكتروني', params.requesterEmail],
+    ],
+    [
+      ['الموقع', params.location],
+      ['عدد الملاحظات', params.notesCount],
+    ],
+    [['التفاصيل', params.description]],
+    [['حيثيات الطلب', params.sourcePurpose]],
+    [['السبب/ الملاحظة', params.justification]],
+    [['ملاحظة المدير', params.adminNotes]],
+  ]);
+
+  return `
+<div dir="rtl" style="font-family:Tahoma,Arial,sans-serif;line-height:1.95;color:#152625">
+  <p style="margin:0 0 12px 0">السلام عليكم ورحمة الله وبركاته،،</p>
+  <p style="margin:0 0 16px 0">
+    نفيدكم بالملاحظة/الطلب الموضح أدناه، ونأمل الاطلاع واتخاذ ما يلزم حسب البيان التالي:
+  </p>
+  <div style="margin:0 0 18px 0">${table}</div>
+  <p style="margin:0 0 8px 0">نأمل التكرم باتخاذ الإجراء المناسب، والتوجيه لمن يلزم حيال ذلك.</p>
+  <p style="margin:0">فريق إدارة عمليات التدريب</p>
+  <p style="margin:0">وكالة التدريب</p>
+</div>
+  `.trim();
+}
+
+function supportRecipients(requesterEmail: string) {
+  return ['ssd@nauss.edu.sa', 'AAlosaimi@nauss.edu.sa', requesterEmail].filter(Boolean).join(', ');
+}
+
+function purchaseRecipients() {
+  return ['NMuharib@nauss.edu.sa'].join(', ');
 }
 
 export async function GET(request: NextRequest) {
@@ -429,6 +529,8 @@ async function handleModeration(request: NextRequest) {
     const externalRecipient = String(justificationData.externalRecipient || '').trim();
     const sourcePurpose = String(justificationData.sourcePurpose || '').trim();
     const rawJustification = String(justificationData.rawJustification || '').trim();
+    const attachments = Array.isArray(justificationData.attachments) ? justificationData.attachments : [];
+    const notesCount = String(Math.max(attachments.length || 0, 1));
 
     let linkedEntityType = '';
     let linkedEntityId = '';
@@ -452,7 +554,7 @@ async function handleModeration(request: NextRequest) {
           status: MaintenanceStatus.PENDING,
           notes: [
             itemName ? `المادة/العنصر: ${itemName}` : '',
-            quantity ? `الكمية: ${quantity}` : '',
+            quantity ? `عدد الملاحظات: ${notesCount}` : '',
             location ? `الموقع: ${location}` : '',
             adminNotes ? `ملاحظة المدير: ${adminNotes}` : '',
           ]
@@ -465,8 +567,7 @@ async function handleModeration(request: NextRequest) {
       linkedEntityId = maintenance.id;
       linkedCode = maintenance.code;
 
-      const htmlBody = buildMemoBody({
-        subjectTitle: category === 'CLEANING' ? 'طلب نظافة' : 'طلب صيانة',
+      const htmlBody = buildSupportMemoBody({
         requestCode: maintenance.code,
         createdAt: suggestion.createdAt,
         requestTypeLabel: category === 'CLEANING' ? 'طلب نظافة' : 'طلب صيانة',
@@ -474,8 +575,7 @@ async function handleModeration(request: NextRequest) {
         requesterDepartment,
         requesterEmail,
         location: location || '—',
-        itemName: itemName || '—',
-        quantity: String(quantity || 1),
+        notesCount,
         description: suggestion.description || '—',
         sourcePurpose: sourcePurpose || '—',
         justification: rawJustification || '—',
@@ -486,7 +586,7 @@ async function handleModeration(request: NextRequest) {
         data: {
           sourceType: 'maintenance',
           sourceId: maintenance.id,
-          recipient: externalRecipient || supportRecipients(category, requesterEmail),
+          recipient: externalRecipient || supportRecipients(requesterEmail),
           subject: `${category === 'CLEANING' ? 'طلب نظافة' : 'طلب صيانة'} - ${maintenance.code}`,
           body: htmlBody,
           status: 'DRAFT',
@@ -520,17 +620,14 @@ async function handleModeration(request: NextRequest) {
       linkedEntityId = purchase.id;
       linkedCode = purchase.code;
 
-      const htmlBody = buildMemoBody({
-        subjectTitle: 'طلب شراء مباشر',
+      const htmlBody = buildPurchaseMemoBody({
         requestCode: purchase.code,
         createdAt: suggestion.createdAt,
-        requestTypeLabel: 'طلب شراء مباشر',
         requesterName,
         requesterDepartment,
         requesterEmail,
         location: location || '—',
-        itemName: itemName || purchase.items || '—',
-        quantity: String(quantity || 1),
+        notesCount,
         description: suggestion.description || '—',
         sourcePurpose: sourcePurpose || '—',
         justification: rawJustification || '—',
@@ -541,7 +638,7 @@ async function handleModeration(request: NextRequest) {
         data: {
           sourceType: 'purchase',
           sourceId: purchase.id,
-          recipient: externalRecipient || purchaseRecipients(requesterEmail),
+          recipient: externalRecipient || purchaseRecipients(),
           subject: `طلب شراء مباشر - ${purchase.code}`,
           body: htmlBody,
           status: 'DRAFT',
@@ -556,17 +653,14 @@ async function handleModeration(request: NextRequest) {
       linkedEntityId = suggestion.id;
       linkedCode = requestCode;
 
-      const htmlBody = buildMemoBody({
-        subjectTitle: suggestion.title || 'طلب آخر',
+      const htmlBody = buildOtherMemoBody({
         requestCode,
         createdAt: suggestion.createdAt,
-        requestTypeLabel: 'طلب آخر',
         requesterName,
         requesterDepartment,
         requesterEmail,
         location: location || '—',
-        itemName: itemName || '—',
-        quantity: String(quantity || 1),
+        notesCount,
         description: suggestion.description || '—',
         sourcePurpose: sourcePurpose || '—',
         justification: rawJustification || '—',
