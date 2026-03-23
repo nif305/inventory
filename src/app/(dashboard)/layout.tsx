@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { NotificationBell } from '@/components/layout/NotificationBell';
 
@@ -24,7 +24,7 @@ const iconClass = 'h-5 w-5 shrink-0';
 
 const managerWarehouseGroups: NavGroup[] = [
   {
-    title: 'التشغيل',
+    title: 'لوحة التحكم',
     items: [
       {
         href: '/dashboard',
@@ -39,6 +39,11 @@ const managerWarehouseGroups: NavGroup[] = [
           </svg>
         ),
       },
+    ],
+  },
+  {
+    title: 'القسم الرئيسي',
+    items: [
       {
         href: '/inventory',
         label: 'المخزون',
@@ -81,19 +86,32 @@ const managerWarehouseGroups: NavGroup[] = [
     items: [
       {
         href: '/maintenance',
-        label: 'الصيانة والنظافة',
-        roles: ['manager', 'warehouse'],
+        label: 'الصيانة',
+        roles: ['manager'],
         icon: (
           <svg className={iconClass} viewBox="0 0 24 24" fill="none">
-            <path d="m14 7 3-3 3 3-3 3-3-3Z" stroke="currentColor" strokeWidth="1.8" />
-            <path d="M13 8 6 15a2.12 2.12 0 1 0 3 3l7-7" stroke="currentColor" strokeWidth="1.8" />
+            <path d="m14.7 6.3 3 3-8.4 8.4H6.3v-3L14.7 6.3Z" stroke="currentColor" strokeWidth="1.8" />
+            <path d="m13.3 7.7 3 3" stroke="currentColor" strokeWidth="1.8" />
+          </svg>
+        ),
+      },
+      {
+        href: '/suggestions?category=CLEANING',
+        label: 'النظافة',
+        roles: ['manager'],
+        icon: (
+          <svg className={iconClass} viewBox="0 0 24 24" fill="none">
+            <path d="M7 21h10" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M12 3v12" stroke="currentColor" strokeWidth="1.8" />
+            <path d="m8 7 4-4 4 4" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M8 15h8" stroke="currentColor" strokeWidth="1.8" />
           </svg>
         ),
       },
       {
         href: '/purchases',
-        label: 'تذاكر الشراء',
-        roles: ['manager', 'warehouse'],
+        label: 'الشراء المباشر',
+        roles: ['manager'],
         icon: (
           <svg className={iconClass} viewBox="0 0 24 24" fill="none">
             <path d="M6 7h13l-1.2 6.2a2 2 0 0 1-2 1.6H9.3a2 2 0 0 1-2-1.6L6 7Z" stroke="currentColor" strokeWidth="1.8" />
@@ -103,6 +121,23 @@ const managerWarehouseGroups: NavGroup[] = [
           </svg>
         ),
       },
+      {
+        href: '/suggestions?category=OTHER',
+        label: 'الطلبات الأخرى',
+        roles: ['manager'],
+        icon: (
+          <svg className={iconClass} viewBox="0 0 24 24" fill="none">
+            <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M9.5 9a2.5 2.5 0 1 1 4 2c-.8.6-1.5 1.1-1.5 2" stroke="currentColor" strokeWidth="1.8" />
+            <path d="M12 17h.01" stroke="currentColor" strokeWidth="1.8" />
+          </svg>
+        ),
+      },
+    ],
+  },
+  {
+    title: 'المراسلات',
+    items: [
       {
         href: '/messages',
         label: 'المراسلات الداخلية',
@@ -143,7 +178,7 @@ const managerWarehouseGroups: NavGroup[] = [
       {
         href: '/reports',
         label: 'التقارير',
-        roles: ['manager', 'warehouse'],
+        roles: ['manager'],
         icon: (
           <svg className={iconClass} viewBox="0 0 24 24" fill="none">
             <path d="M7 18V10M12 18V6M17 18v-4" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
@@ -154,7 +189,7 @@ const managerWarehouseGroups: NavGroup[] = [
       {
         href: '/archive',
         label: 'الأرشيف',
-        roles: ['manager', 'warehouse'],
+        roles: ['manager'],
         icon: (
           <svg className={iconClass} viewBox="0 0 24 24" fill="none">
             <path d="M5 7h14v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V7Z" stroke="currentColor" strokeWidth="1.8" />
@@ -275,9 +310,15 @@ function canAccess(item: NavItem, role?: string) {
   return item.roles.includes((role as AppRole) || 'user');
 }
 
-function isActive(pathname: string, href: string) {
+function isActive(pathname: string, href: string, searchCategory: string | null) {
   if (href === '/dashboard') return pathname === '/dashboard';
-  return pathname.startsWith(href);
+
+  if (href.startsWith('/suggestions?category=')) {
+    const targetCategory = href.split('category=')[1] || '';
+    return pathname === '/suggestions' && searchCategory === targetCategory;
+  }
+
+  return pathname === href || pathname.startsWith(`${href}/`);
 }
 
 function LogoutIcon() {
@@ -321,12 +362,14 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const searchCategory = searchParams.get('category');
   const { user, logout, switchViewRole, originalUser, canUseRoleSwitch } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
 
   useEffect(() => {
     setMobileOpen(false);
-  }, [pathname]);
+  }, [pathname, searchCategory]);
 
   useEffect(() => {
     if (typeof document === 'undefined') return;
@@ -386,7 +429,7 @@ export default function DashboardLayout({
 
               <div className="space-y-2">
                 {group.items.map((item) => {
-                  const active = isActive(pathname, item.href);
+                  const active = isActive(pathname, item.href, searchCategory);
 
                   return (
                     <Link
