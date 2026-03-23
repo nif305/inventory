@@ -125,6 +125,11 @@ function parseJsonObject(value?: string | null) {
   }
 }
 
+function normalizeAttachments(value: any) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => (typeof item === 'string' ? { filename: item } : item || {})).filter(Boolean);
+}
+
 function formatDateTime(value: Date | string) {
   const dateValue = typeof value === 'string' ? new Date(value) : value;
 
@@ -146,17 +151,7 @@ function formatDateTime(value: Date | string) {
   return { date, time };
 }
 
-function buildFourColumnMemoTable(rows: string[]) {
-  return `
-<table dir="rtl" style="width:100%;border-collapse:collapse;font-family:Tahoma,Arial,sans-serif;font-size:14px;table-layout:fixed">
-  <tbody>
-    ${rows.join('')}
-  </tbody>
-</table>
-  `.trim();
-}
-
-function buildPairRow(label1: string, value1: string, label2: string, value2: string) {
+function pairRow(label1: string, value1: string, label2: string, value2: string) {
   return `
 <tr>
   <td style="width:16%;border:1px solid #d6d7d4;background:#f8f9f9;padding:10px;font-weight:bold;color:#1f3d3c;vertical-align:top">${escapeHtml(label1)}</td>
@@ -167,7 +162,7 @@ function buildPairRow(label1: string, value1: string, label2: string, value2: st
   `.trim();
 }
 
-function buildMergedRow(label: string, value: string) {
+function mergedRow(label: string, value: string) {
   return `
 <tr>
   <td style="width:16%;border:1px solid #d6d7d4;background:#f8f9f9;padding:10px;font-weight:bold;color:#1f3d3c;vertical-align:top">${escapeHtml(label)}</td>
@@ -247,16 +242,16 @@ function buildMemoBody(params: {
       ? 'طلب شراء مباشر'
       : 'طلب آخر';
 
-  const table = buildFourColumnMemoTable([
-    buildPairRow('رقم الطلب', params.requestCode, 'تاريخ الطلب', `${date} | ${time}`),
-    buildMergedRow('نوع الطلب', requestTypeLabel),
-    buildPairRow('مقدم الطلب', params.requesterName, 'الإدارة', `${params.requesterDepartment} | ${params.requesterEmail}`),
-    buildPairRow('الموقع', params.location, 'عدد الملاحظات', params.notesCount),
-    buildMergedRow('التفاصيل', params.description),
-    buildMergedRow('حيثيات الطلب', params.sourcePurpose),
-    buildMergedRow('السبب/ الملاحظة', params.justification),
-    buildMergedRow('ملاحظة المدير', params.adminNotes),
-  ]);
+  const rows = [
+    pairRow('رقم الطلب', params.requestCode, 'تاريخ الطلب / وقت الطلب', `${date} | ${time}`),
+    mergedRow('نوع الطلب', requestTypeLabel),
+    pairRow('مقدم الطلب', params.requesterName, 'الإدارة / البريد الإلكتروني', `${params.requesterDepartment} | ${params.requesterEmail}`),
+    pairRow('الموقع', params.location, 'عدد الملاحظات', params.notesCount),
+    mergedRow('التفاصيل', params.description),
+    mergedRow('حيثيات الطلب', params.sourcePurpose),
+    mergedRow('السبب/ الملاحظة', params.justification),
+    mergedRow('ملاحظة المدير', params.adminNotes),
+  ];
 
   const intro =
     params.category === 'PURCHASE'
@@ -275,15 +270,14 @@ function buildMemoBody(params: {
   return `
 <div dir="rtl" style="font-family:Tahoma,Arial,sans-serif;line-height:1.95;color:#152625">
   ${intro}
-  <div style="margin:0 0 18px 0">${table}</div>
+  <table dir="rtl" style="width:100%;border-collapse:collapse;font-family:Tahoma,Arial,sans-serif;font-size:14px;table-layout:fixed">
+    <tbody>
+      ${rows.join('')}
+    </tbody>
+  </table>
   ${closing}
 </div>
   `.trim();
-}
-
-function normalizeAttachments(value: any) {
-  if (!Array.isArray(value)) return [];
-  return value.map((item) => (typeof item === 'string' ? { filename: item } : item || {})).filter(Boolean);
 }
 
 function resolveRecipients(category: string, requesterEmail?: string | null, externalRecipient?: string) {
