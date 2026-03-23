@@ -108,6 +108,116 @@ function normalizeTargetDepartment(value?: string) {
   return raw;
 }
 
+function formatArabicDate(value: Date) {
+  try {
+    return new Intl.DateTimeFormat('ar-SA', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(value);
+  } catch {
+    return value.toISOString().slice(0, 10);
+  }
+}
+
+function formatArabicTime(value: Date) {
+  try {
+    return new Intl.DateTimeFormat('ar-SA', {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(value);
+  } catch {
+    return value.toISOString().slice(11, 16);
+  }
+}
+
+function parseJsonObject(value?: string | null) {
+  if (!value) return {} as Record<string, any>;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {} as Record<string, any>;
+  }
+}
+
+function resolveRecipients(category: string, requesterEmail?: string | null, externalRecipient?: string) {
+  const recipients: string[] = [];
+
+  if (category === 'MAINTENANCE' || category === 'CLEANING') {
+    recipients.push('ssd@nauss.edu.sa', 'AAlosaimi@nauss.edu.sa');
+  } else if (category === 'PURCHASE') {
+    recipients.push(
+      'finance@nauss.edu.sa',
+      'aalaraj@nauss.edu.sa',
+      'YAlqaoud@nauss.edu.sa',
+      'Procurement@nauss.edu.sa'
+    );
+  } else if (externalRecipient) {
+    externalRecipient
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .forEach((item) => recipients.push(item));
+  }
+
+  if (requesterEmail) {
+    recipients.push(requesterEmail);
+  }
+
+  return Array.from(new Set(recipients.map((item) => item.trim()).filter(Boolean))).join(', ');
+}
+
+function buildFormalBody(params: {
+  category: string;
+  requestCode: string;
+  createdAt: Date;
+  title: string;
+  description: string;
+  requesterName: string;
+  requesterDepartment: string;
+  requesterEmail: string;
+  itemName: string;
+  quantity: number;
+  location: string;
+  justification: string;
+  adminNotes: string;
+}) {
+  const categoryLabel =
+    params.category === 'MAINTENANCE'
+      ? 'صيانة'
+      : params.category === 'CLEANING'
+      ? 'نظافة'
+      : params.category === 'PURCHASE'
+      ? 'شراء مباشر'
+      : 'طلب آخر';
+
+  return `سعادة الجهة المختصة سلّمها الله،
+
+السلام عليكم ورحمة الله وبركاته،
+
+نفيدكم بورود ${categoryLabel} عبر منصة مواد التدريب، ونأمل التكرم بالاطلاع واتخاذ ما يلزم حيال الطلب الموضح أدناه:
+
+رقم الطلب: ${params.requestCode}
+تاريخ الطلب: ${formatArabicDate(params.createdAt)}
+وقت الطلب: ${formatArabicTime(params.createdAt)}
+نوع الطلب: ${params.title}
+مقدم الطلب: ${params.requesterName}
+الإدارة: ${params.requesterDepartment}
+البريد الإلكتروني: ${params.requesterEmail || '—'}
+الموقع: ${params.location || '—'}
+العنصر/الجزء: ${params.itemName || '—'}
+الكمية: ${params.quantity || 1}
+التفاصيل: ${params.description || '—'}
+حيثيات الطلب: ${params.justification || '—'}
+ملاحظة المدير: ${params.adminNotes || '—'}
+
+نأمل التكرم بمعالجة الطلب حسب المتاح، ولكم خالص التقدير.
+
+إدارة عمليات التدريب
+وكالة التدريب`;
+}
+
 async function generateMaintenanceCode() {
   const count = await prisma.maintenanceRequest.count();
   return `MNT-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
@@ -116,6 +226,11 @@ async function generateMaintenanceCode() {
 async function generatePurchaseCode() {
   const count = await prisma.purchaseRequest.count();
   return `PUR-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
+}
+
+async function generateOtherCode() {
+  const count = await prisma.suggestion.count({ where: { category: 'OTHER' } });
+  return `OTH-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
 }
 
 export async function GET(request: NextRequest) {
@@ -150,6 +265,7 @@ export async function GET(request: NextRequest) {
         fullName: true,
         department: true,
         role: true,
+        email: true,
       },
     });
 
@@ -162,7 +278,7 @@ export async function GET(request: NextRequest) {
       })),
     });
   } catch (error: any) {
-    return NextResponse.json({ error: error.message || 'تعذر جلب الطلبات الأخرى' }, { status: 500 });
+    return NextResponse.json({ error: error.message || 'تعذر جلب الطلبات' }, { status: 500 });
   }
 }
 
@@ -175,10 +291,14 @@ export async function POST(request: NextRequest) {
     const priority = normalizePriority(body.priority);
 
     const itemName = String(body.itemName || '').trim();
-    const quantity = Number(body.quantity || 1);
+    const quantity = Math.max(1, Number(body.quantity || 1));
     const location = String(body.location || '').trim();
     const targetDepartment = normalizeTargetDepartment(body.targetDepartment);
     const externalRecipient = String(body.externalRecipient || '').trim();
+    const requestSource = String(body.requestSource || '').trim();
+    const programName = String(body.programName || '').trim();
+    const area = String(body.area || '').trim();
+    const attachments = Array.isArray(body.attachments) ? body.attachments : [];
 
     const description = String(body.description || '').trim();
     const justification = String(body.justification || '').trim();
@@ -193,7 +313,7 @@ export async function POST(request: NextRequest) {
         : 'طلب آخر');
 
     if (!description || !justification) {
-      return NextResponse.json({ error: 'الوصف والمبررات حقول مطلوبة' }, { status: 400 });
+      return NextResponse.json({ error: 'الوصف والحيثيات حقول مطلوبة' }, { status: 400 });
     }
 
     const suggestion = await prisma.suggestion.create({
@@ -207,6 +327,10 @@ export async function POST(request: NextRequest) {
           location,
           targetDepartment,
           externalRecipient,
+          requestSource,
+          programName,
+          area,
+          attachments,
         }),
         category,
         priority,
@@ -226,6 +350,7 @@ export async function POST(request: NextRequest) {
           category,
           itemName,
           quantity,
+          location,
         }),
       },
     });
@@ -249,6 +374,7 @@ export async function PUT(request: NextRequest) {
     const action = String(body.action || '').trim().toLowerCase();
     const adminNotes = String(body.adminNotes || '').trim();
     const targetDepartment = normalizeTargetDepartment(body.targetDepartment);
+    const managerRecipient = String(body.managerRecipient || '').trim();
 
     if (!suggestionId || !action) {
       return NextResponse.json({ error: 'البيانات غير مكتملة' }, { status: 400 });
@@ -262,13 +388,12 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: 'الطلب غير موجود' }, { status: 404 });
     }
 
-    const justificationData = (() => {
-      try {
-        return JSON.parse(suggestion.justification || '{}');
-      } catch {
-        return {};
-      }
-    })();
+    const requester = await prisma.user.findUnique({
+      where: { id: suggestion.requesterId },
+      select: { id: true, fullName: true, department: true, email: true },
+    });
+
+    const justificationData = parseJsonObject(suggestion.justification);
 
     if (action === 'reject') {
       const updated = await prisma.suggestion.update({
@@ -298,7 +423,7 @@ export async function PUT(request: NextRequest) {
 
     const category = normalizeCategory(suggestion.category);
     const itemName = String(justificationData.itemName || '').trim();
-    const quantity = Number(justificationData.quantity || 1);
+    const quantity = Math.max(1, Number(justificationData.quantity || 1));
     const location = String(justificationData.location || '').trim();
     const externalRecipient = String(justificationData.externalRecipient || '').trim();
 
@@ -316,11 +441,12 @@ export async function PUT(request: NextRequest) {
           category: category === 'CLEANING' ? 'CLEANING' : 'TECHNICAL',
           description: suggestion.description,
           priority: suggestion.priority,
-          status: MaintenanceStatus.PENDING,
+          status: MaintenanceStatus.APPROVED,
           notes: [
-            itemName ? `المادة/العنصر: ${itemName}` : '',
+            itemName ? `العنصر: ${itemName}` : '',
             quantity ? `الكمية: ${quantity}` : '',
             location ? `الموقع: ${location}` : '',
+            justificationData.rawJustification ? `الحيثيات: ${justificationData.rawJustification}` : '',
             adminNotes ? `ملاحظة المدير: ${adminNotes}` : '',
           ]
             .filter(Boolean)
@@ -328,32 +454,43 @@ export async function PUT(request: NextRequest) {
         },
       });
 
+      const recipient = resolveRecipients(category, requester?.email, externalRecipient);
+      const draft = await prisma.emailDraft.create({
+        data: {
+          sourceType: category === 'CLEANING' ? 'cleaning' : 'maintenance',
+          sourceId: maintenance.id,
+          recipient,
+          subject: `${category === 'CLEANING' ? 'طلب نظافة' : 'طلب صيانة'} - ${maintenance.code}`,
+          body: buildFormalBody({
+            category,
+            requestCode: maintenance.code,
+            createdAt: suggestion.createdAt,
+            title: suggestion.title,
+            description: suggestion.description,
+            requesterName: requester?.fullName || '—',
+            requesterDepartment: requester?.department || '—',
+            requesterEmail: requester?.email || '',
+            itemName,
+            quantity,
+            location,
+            justification: String(justificationData.rawJustification || '').trim(),
+            adminNotes,
+          }),
+          status: 'DRAFT',
+        },
+      });
+
       linkedEntityType = 'MaintenanceRequest';
       linkedEntityId = maintenance.id;
       linkedCode = maintenance.code;
 
-      await prisma.emailDraft.create({
+      await prisma.auditLog.create({
         data: {
-          sourceType: 'maintenance',
-          sourceId: maintenance.id,
-          recipient: externalRecipient || targetDepartment,
-          subject: `طلب ${category === 'CLEANING' ? 'نظافة' : 'صيانة'} - ${maintenance.code}`,
-          body: `
-سعادة الجهة المختصة حفظها الله،
-
-نفيدكم بوجود طلب ${category === 'CLEANING' ? 'نظافة' : 'صيانة'} يحتاج المعالجة وفق البيانات الآتية:
-
-- رقم الطلب: ${maintenance.code}
-- الوصف: ${suggestion.description}
-- المادة / العنصر: ${itemName || 'غير محدد'}
-- الكمية: ${quantity || 1}
-- الموقع: ${location || 'غير محدد'}
-- الأولوية: ${suggestion.priority}
-- مبررات الطلب: ${justificationData.rawJustification || '—'}
-
-نأمل اتخاذ اللازم، ولكم التقدير.
-          `.trim(),
-          status: 'DRAFT',
+          userId: sessionUser.id,
+          action: 'CREATE_EMAIL_DRAFT',
+          entity: 'EmailDraft',
+          entityId: draft.id,
+          details: JSON.stringify({ recipient, sourceType: draft.sourceType, sourceId: draft.sourceId }),
         },
       });
     } else if (category === 'PURCHASE') {
@@ -366,8 +503,8 @@ export async function PUT(request: NextRequest) {
           items: itemName ? `${itemName} × ${quantity}` : suggestion.title,
           reason: suggestion.description,
           budgetNote: [
-            `مبررات الطلب: ${justificationData.rawJustification || '—'}`,
-            location ? `الموقع/الجهة: ${location}` : '',
+            justificationData.rawJustification ? `الحيثيات: ${justificationData.rawJustification}` : '',
+            location ? `الموقع: ${location}` : '',
             adminNotes ? `ملاحظة المدير: ${adminNotes}` : '',
           ]
             .filter(Boolean)
@@ -378,67 +515,93 @@ export async function PUT(request: NextRequest) {
         },
       });
 
+      const recipient = resolveRecipients(category, requester?.email, externalRecipient);
+      const draft = await prisma.emailDraft.create({
+        data: {
+          sourceType: 'purchase',
+          sourceId: purchase.id,
+          recipient,
+          subject: `طلب شراء مباشر - ${purchase.code}`,
+          body: buildFormalBody({
+            category,
+            requestCode: purchase.code,
+            createdAt: suggestion.createdAt,
+            title: suggestion.title,
+            description: suggestion.description,
+            requesterName: requester?.fullName || '—',
+            requesterDepartment: requester?.department || '—',
+            requesterEmail: requester?.email || '',
+            itemName,
+            quantity,
+            location,
+            justification: String(justificationData.rawJustification || '').trim(),
+            adminNotes,
+          }),
+          status: 'DRAFT',
+        },
+      });
+
       linkedEntityType = 'PurchaseRequest';
       linkedEntityId = purchase.id;
       linkedCode = purchase.code;
 
-      await prisma.emailDraft.create({
+      await prisma.auditLog.create({
         data: {
-          sourceType: 'purchase',
-          sourceId: purchase.id,
-          recipient: externalRecipient || targetDepartment,
-          subject: `طلب شراء مباشر - ${purchase.code}`,
-          body: `
-سعادة الجهة المختصة حفظها الله،
-
-نفيدكم بحاجة وكالة التدريب إلى تنفيذ طلب شراء مباشر وفق البيانات الآتية:
-
-- رقم الطلب: ${purchase.code}
-- المادة / الصنف: ${itemName || purchase.items}
-- الكمية: ${quantity || 1}
-- الوصف: ${suggestion.description}
-- المبررات: ${justificationData.rawJustification || '—'}
-- الموقع / الجهة المستفيدة: ${location || 'غير محدد'}
-
-نأمل التكرم باستكمال الإجراء اللازم.
-          `.trim(),
-          status: 'DRAFT',
+          userId: sessionUser.id,
+          action: 'CREATE_EMAIL_DRAFT',
+          entity: 'EmailDraft',
+          entityId: draft.id,
+          details: JSON.stringify({ recipient, sourceType: draft.sourceType, sourceId: draft.sourceId }),
         },
       });
     } else {
-      await prisma.emailDraft.create({
+      const code = await generateOtherCode();
+      const recipient = resolveRecipients(category, requester?.email, managerRecipient || externalRecipient);
+
+      const draft = await prisma.emailDraft.create({
         data: {
           sourceType: 'other',
           sourceId: suggestion.id,
-          recipient: externalRecipient || targetDepartment,
-          subject: `${suggestion.title} - طلب إحالة خارجي`,
-          body: `
-سعادة الجهة المختصة حفظها الله،
-
-نفيدكم بورود الطلب الآتي من داخل المنصة، ونأمل التكرم بمراجعته واتخاذ اللازم:
-
-- العنوان: ${suggestion.title}
-- الوصف: ${suggestion.description}
-- المادة / العنصر: ${itemName || 'غير محدد'}
-- الكمية: ${quantity || 1}
-- الموقع: ${location || 'غير محدد'}
-- المبررات: ${justificationData.rawJustification || '—'}
-
-وتفضلوا بقبول التقدير.
-          `.trim(),
+          recipient,
+          subject: `${suggestion.title} - ${code}`,
+          body: buildFormalBody({
+            category,
+            requestCode: code,
+            createdAt: suggestion.createdAt,
+            title: suggestion.title,
+            description: suggestion.description,
+            requesterName: requester?.fullName || '—',
+            requesterDepartment: requester?.department || '—',
+            requesterEmail: requester?.email || '',
+            itemName,
+            quantity,
+            location,
+            justification: String(justificationData.rawJustification || '').trim(),
+            adminNotes,
+          }),
           status: 'DRAFT',
         },
       });
 
       linkedEntityType = 'EmailDraft';
-      linkedEntityId = suggestion.id;
-      linkedCode = suggestion.title;
+      linkedEntityId = draft.id;
+      linkedCode = code;
+
+      await prisma.auditLog.create({
+        data: {
+          userId: sessionUser.id,
+          action: 'CREATE_EMAIL_DRAFT',
+          entity: 'EmailDraft',
+          entityId: draft.id,
+          details: JSON.stringify({ recipient, sourceType: draft.sourceType, sourceId: draft.sourceId }),
+        },
+      });
     }
 
     const updated = await prisma.suggestion.update({
       where: { id: suggestionId },
       data: {
-        status: SuggestionStatus.IMPLEMENTED,
+        status: SuggestionStatus.APPROVED,
         adminNotes: JSON.stringify({
           adminNotes,
           targetDepartment,
