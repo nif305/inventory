@@ -75,8 +75,8 @@ function normalizeArabic(value: string) {
 }
 
 function roleLabel(role: UserRow['role']) {
-  if (role === 'manager') return 'مدير';
-  if (role === 'warehouse') return 'مسؤول مخزن';
+  if (role === 'manager') return 'مدير + موظف';
+  if (role === 'warehouse') return 'مسؤول مخزن + موظف';
   return 'موظف';
 }
 
@@ -273,7 +273,7 @@ export default function UsersPage() {
             المستخدمون
           </h1>
           <p className="text-[13px] leading-7 text-[#61706f] sm:text-sm">
-            الحسابات تعمل مباشرة بعد التسجيل. دور المدير هنا هو إدارة الدور وإيقاف الحساب أو تنشيطه عند الحاجة.
+            الحسابات تعمل مباشرة بعد التسجيل. عند اختيار مدير أو مسؤول مخزن فإن المستخدم يحتفظ تلقائيًا بوضع الموظف عبر مبدّل الأدوار في الهيدر.
           </p>
         </div>
 
@@ -512,7 +512,7 @@ export default function UsersPage() {
               />
 
               <div className="space-y-2">
-                <label className="block text-sm font-semibold text-slate-700">الدور</label>
+                <label className="block text-sm font-semibold text-slate-700">الدور الأساسي</label>
                 <select
                   value={form.role}
                   onChange={(e) =>
@@ -523,10 +523,11 @@ export default function UsersPage() {
                   }
                   className="w-full rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-800 outline-none transition focus:border-[#016564] focus:ring-4 focus:ring-[#016564]/10"
                 >
-                  <option value="manager">مدير</option>
-                  <option value="warehouse">مسؤول مخزن</option>
+                  <option value="manager">مدير + موظف</option>
+                  <option value="warehouse">مسؤول مخزن + موظف</option>
                   <option value="user">موظف</option>
                 </select>
+                <p className="text-xs leading-6 text-[#61706f]">اختيار مدير أو مسؤول مخزن يمنح المستخدم صلاحية ذلك الدور مع الاحتفاظ بوضع الموظف عبر مبدّل الأدوار في الهيدر.</p>
               </div>
 
               <div className="space-y-2">
