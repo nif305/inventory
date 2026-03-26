@@ -23,6 +23,7 @@ export type AppUser = {
   jobTitle?: string;
   operationalProject?: string;
   role: Role;
+  roles: Role[];
   status: Status;
   avatar?: string | null;
   createdAt?: string | null;
@@ -70,7 +71,41 @@ function normalizeStatus(status?: string | null): Status {
   return 'active';
 }
 
+function normalizeRoles(input: unknown, fallbackRole?: string | null): Role[] {
+  const raw = Array.isArray(input) ? input : [];
+  const normalized = raw
+    .map((entry) => normalizeRole(typeof entry === 'string' ? entry : String(entry || '')))
+    .filter(Boolean);
+
+  const unique = Array.from(new Set<Role>(['user', ...normalized]));
+
+  if (unique.length > 0) {
+    if (unique.includes('manager')) {
+      return ['user', 'warehouse', 'manager'].filter((role) => unique.includes(role as Role)) as Role[];
+    }
+
+    if (unique.includes('warehouse')) {
+      return ['user', 'warehouse'].filter((role) => unique.includes(role as Role)) as Role[];
+    }
+
+    return ['user'];
+  }
+
+  const single = normalizeRole(fallbackRole);
+  if (single === 'manager') return ['user', 'manager'];
+  if (single === 'warehouse') return ['user', 'warehouse'];
+  return ['user'];
+}
+
+function getPrimaryRole(roles: Role[], fallbackRole?: string | null): Role {
+  if (roles.includes('manager')) return 'manager';
+  if (roles.includes('warehouse')) return 'warehouse';
+  return normalizeRole(fallbackRole);
+}
+
 function normalizeUser(user: any): AppUser {
+  const roles = normalizeRoles(user?.roles, user?.role);
+
   return {
     id: user?.id || '',
     employeeId: user?.employeeId || '',
@@ -81,7 +116,8 @@ function normalizeUser(user: any): AppUser {
     department: user?.department || '',
     jobTitle: user?.jobTitle || '',
     operationalProject: user?.operationalProject || user?.department || '',
-    role: normalizeRole(user?.role),
+    role: getPrimaryRole(roles, user?.role),
+    roles,
     status: normalizeStatus(user?.status),
     avatar: user?.avatar || null,
     createdAt: user?.createdAt || null,
@@ -256,13 +292,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const switchViewRole = useCallback(
     (role: Role) => {
       if (!originalUser) return;
-
-      const allowed =
-        (originalUser.role === 'manager' &&
-          (role === 'manager' || role === 'warehouse' || role === 'user')) ||
-        (originalUser.role === 'warehouse' && (role === 'warehouse' || role === 'user'));
-
-      if (!allowed) return;
+      if (!originalUser.roles.includes(role)) return;
 
       const nextUser = { ...originalUser, role };
       setUser(nextUser);
@@ -278,8 +308,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       allUsers,
       loading,
       isAuthenticated: !!user,
-      canUseRoleSwitch:
-        originalUser?.role === 'manager' || originalUser?.role === 'warehouse',
+      canUseRoleSwitch: (originalUser?.roles?.length || 0) > 1,
       login,
       logout,
       refreshUsers,
