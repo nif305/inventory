@@ -82,7 +82,7 @@ export async function GET(request: NextRequest) {
       where: {
         userId: session.id,
         status: {
-          in: [CustodyStatus.ACTIVE, CustodyStatus.OVERDUE, CustodyStatus.RETURN_REQUESTED],
+          in: [CustodyStatus.ACTIVE, CustodyStatus.RETURN_REQUESTED],
         },
         item: {
           type: ItemType.RETURNABLE,
