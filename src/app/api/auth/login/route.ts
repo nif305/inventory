@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
+type UserRoleValue = 'USER' | 'WAREHOUSE' | 'MANAGER';
+
 function normalizeEmail(value?: string | null) {
   return (value || '').trim().toLowerCase();
 }
@@ -9,20 +11,31 @@ function normalizeText(value?: string | null) {
   return (value || '').trim();
 }
 
-type NormalizedRole = 'manager' | 'warehouse' | 'user';
+function normalizeRoleValue(value?: string | null): UserRoleValue {
+  const normalized = (value || '').trim().toUpperCase();
 
-function normalizeRole(value?: string | null): NormalizedRole {
-  const role = (value || '').trim().toUpperCase();
-  if (role === 'MANAGER') return 'manager';
-  if (role === 'WAREHOUSE') return 'warehouse';
-  return 'user';
+  if (normalized === 'MANAGER') return 'MANAGER';
+  if (normalized === 'WAREHOUSE') return 'WAREHOUSE';
+  return 'USER';
 }
 
-function pickPrimaryRole(roles: string[]): NormalizedRole {
-  const normalized = roles.map(normalizeRole);
-  if (normalized.includes('manager')) return 'manager';
-  if (normalized.includes('warehouse')) return 'warehouse';
-  return 'user';
+function normalizeRoles(values?: string[] | null): UserRoleValue[] {
+  const rawValues = Array.isArray(values) ? values : [];
+  const normalized = Array.from(
+    new Set(rawValues.map((value) => normalizeRoleValue(value)))
+  );
+
+  if (!normalized.includes('USER')) {
+    normalized.unshift('USER');
+  }
+
+  return normalized;
+}
+
+function getPrimaryRole(roles: UserRoleValue[]): UserRoleValue {
+  if (roles.includes('MANAGER')) return 'MANAGER';
+  if (roles.includes('WAREHOUSE')) return 'WAREHOUSE';
+  return 'USER';
 }
 
 export async function POST(request: NextRequest) {
@@ -58,20 +71,12 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'بيانات الدخول غير صحيحة' }, { status: 401 });
     }
 
-    const rolesSource = Array.isArray((user as any).roles)
-      ? ((user as any).roles as string[])
-      : [String((user as any).role || 'USER')];
-
-    const normalizedRoles = Array.from(
-      new Set(
-        rolesSource
-          .map((role) => normalizeRole(role))
-          .filter((role): role is NormalizedRole => !!role),
-      ),
+    const userRoles = normalizeRoles(
+      Array.isArray((user as { roles?: string[] }).roles)
+        ? (user as { roles?: string[] }).roles
+        : [String((user as { role?: string }).role || 'USER')]
     );
-
-    const roles = normalizedRoles.length > 0 ? normalizedRoles : ['user'];
-    const primaryRole = pickPrimaryRole(roles);
+    const primaryRole = getPrimaryRole(userRoles);
     const nowIso = new Date().toISOString();
 
     const response = NextResponse.json({
@@ -86,8 +91,8 @@ export async function POST(request: NextRequest) {
         department: user.department,
         jobTitle: user.jobTitle,
         operationalProject: user.department || '',
-        role: primaryRole,
-        roles,
+        role: primaryRole.toLowerCase(),
+        roles: userRoles.map((role) => role.toLowerCase()),
         status: user.status.toLowerCase(),
         avatar: user.avatar,
         createdAt: user.createdAt.toISOString(),
@@ -118,7 +123,7 @@ export async function POST(request: NextRequest) {
       maxAge: 60 * 60 * 24 * 7,
     });
 
-    response.cookies.set('user_role', primaryRole, {
+    response.cookies.set('user_role', primaryRole.toLowerCase(), {
       httpOnly: true,
       sameSite: 'lax',
       secure: true,
@@ -126,7 +131,7 @@ export async function POST(request: NextRequest) {
       maxAge: 60 * 60 * 24 * 7,
     });
 
-    response.cookies.set('user_roles', JSON.stringify(roles), {
+    response.cookies.set('user_roles', JSON.stringify(userRoles.map((role) => role.toLowerCase())), {
       httpOnly: true,
       sameSite: 'lax',
       secure: true,
