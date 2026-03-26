@@ -1,28 +1,58 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
+type PrismaRole = 'MANAGER' | 'WAREHOUSE' | 'USER';
+
 function normalizeText(value?: string | null) {
   return (value || '').trim();
 }
 
-function normalizeRoles(input: unknown): Array<'USER' | 'WAREHOUSE' | 'MANAGER'> {
-  const values = Array.isArray(input) ? input : input ? [input] : [];
+function normalizeRoleValue(value?: string | null): PrismaRole | null {
+  const role = (value || '').trim().toLowerCase();
+  if (role === 'manager') return 'MANAGER';
+  if (role === 'warehouse') return 'WAREHOUSE';
+  if (role === 'user') return 'USER';
+  return null;
+}
 
-  const mapped = values
-    .map((value) => String(value || '').trim().toLowerCase())
-    .map((value) => {
-      if (value === 'manager' || value === 'مدير') return 'MANAGER' as const;
-      if (value === 'warehouse' || value === 'مسؤول مخزن') return 'WAREHOUSE' as const;
-      return 'USER' as const;
+function normalizeRoles(input: unknown): PrismaRole[] {
+  const values = Array.isArray(input)
+    ? input
+    : input == null
+      ? []
+      : [input];
+
+  const roles = values
+    .map((value) => normalizeRoleValue(String(value)))
+    .filter((value): value is PrismaRole => Boolean(value));
+
+  const uniqueRoles = Array.from(new Set<PrismaRole>(['USER', ...roles]));
+
+  if (uniqueRoles.includes('MANAGER')) {
+    uniqueRoles.sort((a, b) => {
+      const order: Record<PrismaRole, number> = {
+        MANAGER: 0,
+        WAREHOUSE: 1,
+        USER: 2,
+      };
+      return order[a] - order[b];
     });
-
-  const unique = Array.from(new Set(mapped));
-
-  if (!unique.includes('USER')) {
-    unique.unshift('USER');
+    return uniqueRoles;
   }
 
-  return unique;
+  if (uniqueRoles.includes('WAREHOUSE')) {
+    uniqueRoles.sort((a, b) => {
+      const order: Record<PrismaRole, number> = {
+        WAREHOUSE: 0,
+        USER: 1,
+        MANAGER: 2,
+      };
+      return order[a] - order[b];
+    });
+    return uniqueRoles;
+  }
+
+  return ['USER'];
 }
 
 export async function POST(
@@ -59,7 +89,9 @@ export async function POST(
     }
 
     if (action === 'change-role') {
-      const roles = normalizeRoles(body?.roles ?? body?.role);
+      const explicitRoles = normalizeRoles(body?.roles);
+      const fallbackRoles = normalizeRoles(body?.role ? [body.role] : []);
+      const roles = explicitRoles.length > 1 || body?.roles ? explicitRoles : fallbackRoles;
 
       await prisma.user.update({
         where: { id },
@@ -86,6 +118,6 @@ export async function POST(
 
     return NextResponse.json({ error: 'إجراء غير صالح' }, { status: 400 });
   } catch {
-    return NextResponse.json({ error: 'تعذر تنفيذ العملية' }, { status: 500 });
+    return NextResponse.json({ error: 'تعذر تنفيذ الإجراء المطلوب' }, { status: 500 });
   }
 }
