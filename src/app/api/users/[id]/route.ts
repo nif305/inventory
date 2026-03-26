@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
+type UiRole = 'manager' | 'warehouse' | 'user';
+type PrismaRole = 'MANAGER' | 'WAREHOUSE' | 'USER';
+
 function normalizeText(value?: string | null) {
   return (value || '').trim();
 }
@@ -9,7 +12,62 @@ function normalizeEmail(value?: string | null) {
   return (value || '').trim().toLowerCase();
 }
 
+function normalizeRoleValue(role?: string | null): UiRole {
+  const value = (role || '').trim().toLowerCase();
+  if (value === 'manager') return 'manager';
+  if (value === 'warehouse') return 'warehouse';
+  return 'user';
+}
+
+function toPrismaRole(role?: string | null): PrismaRole {
+  const value = normalizeRoleValue(role);
+  if (value === 'manager') return 'MANAGER';
+  if (value === 'warehouse') return 'WAREHOUSE';
+  return 'USER';
+}
+
+function toPrismaRoles(input: unknown, fallback?: PrismaRole[]): PrismaRole[] {
+  const values = Array.isArray(input)
+    ? input
+    : typeof input === 'string'
+      ? [input]
+      : [];
+
+  const mapped = values.map((value) => toPrismaRole(String(value)));
+  const unique = Array.from(new Set<PrismaRole>(['USER', ...mapped]));
+
+  if (unique.length > 0) {
+    return unique;
+  }
+
+  return fallback && fallback.length > 0 ? Array.from(new Set<PrismaRole>(fallback)) : ['USER'];
+}
+
+function toUiRoles(input: unknown): UiRole[] {
+  const values = Array.isArray(input)
+    ? input
+    : typeof input === 'string'
+      ? [input]
+      : [];
+
+  const mapped = values.map((value) => normalizeRoleValue(String(value)));
+  return Array.from(new Set<UiRole>(['user', ...mapped]));
+}
+
+function getPrimaryRole(roles: UiRole[]): UiRole {
+  if (roles.includes('manager')) return 'manager';
+  if (roles.includes('warehouse')) return 'warehouse';
+  return 'user';
+}
+
+function toPrismaStatus(status?: string) {
+  if (status === 'disabled') return 'DISABLED';
+  return 'ACTIVE';
+}
+
 function mapUser(user: any) {
+  const uiRoles = toUiRoles(user?.roles || user?.role);
+
   return {
     id: user.id,
     employeeId: user.employeeId,
@@ -20,7 +78,8 @@ function mapUser(user: any) {
     department: user.department,
     jobTitle: user.jobTitle,
     operationalProject: user.department,
-    role: user.role.toLowerCase(),
+    role: getPrimaryRole(uiRoles),
+    roles: uiRoles,
     status: user.status.toLowerCase(),
     avatar: user.avatar,
     undertaking: {
@@ -33,17 +92,6 @@ function mapUser(user: any) {
     lastLoginAt: null,
     mustChangePassword: false,
   };
-}
-
-function toPrismaRole(role?: string) {
-  if (role === 'manager') return 'MANAGER';
-  if (role === 'warehouse') return 'WAREHOUSE';
-  return 'USER';
-}
-
-function toPrismaStatus(status?: string) {
-  if (status === 'disabled') return 'DISABLED';
-  return 'ACTIVE';
 }
 
 async function updateUserHandler(
@@ -62,7 +110,6 @@ async function updateUserHandler(
     const jobTitle = normalizeText(body?.jobTitle);
     const operationalProject = normalizeText(body?.operationalProject);
     const password = normalizeText(body?.password);
-    const role = normalizeText(body?.role).toLowerCase();
     const status = normalizeText(body?.status).toLowerCase();
 
     const currentUser = await prisma.user.findUnique({
@@ -92,6 +139,11 @@ async function updateUserHandler(
       }
     }
 
+    const requestedRoles =
+      Array.isArray(body?.roles) || body?.role
+        ? toPrismaRoles(body?.roles ?? body?.role, currentUser.roles)
+        : currentUser.roles;
+
     const updatedUser = await prisma.user.update({
       where: { id },
       data: {
@@ -101,7 +153,7 @@ async function updateUserHandler(
         department: operationalProject || department || currentUser.department,
         jobTitle: extension || jobTitle || currentUser.jobTitle,
         passwordHash: password || currentUser.passwordHash,
-        role: role ? toPrismaRole(role) : currentUser.role,
+        roles: requestedRoles,
         status: status ? toPrismaStatus(status) : currentUser.status,
       },
       include: {
