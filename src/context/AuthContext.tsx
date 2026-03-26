@@ -258,7 +258,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!originalUser) return;
 
       const allowed =
-        (originalUser.role === 'manager' && (role === 'manager' || role === 'user')) ||
+        (originalUser.role === 'manager' &&
+          (role === 'manager' || role === 'warehouse' || role === 'user')) ||
         (originalUser.role === 'warehouse' && (role === 'warehouse' || role === 'user'));
 
       if (!allowed) return;
