@@ -9,7 +9,37 @@ function normalizeEmail(value?: string | null) {
   return (value || '').trim().toLowerCase();
 }
 
+function normalizeRoles(value: unknown): string[] {
+  if (!Array.isArray(value)) return ['user'];
+
+  const allowed = new Set(['user', 'warehouse', 'manager']);
+  const roles = value
+    .map((item) => normalizeText(String(item)).toLowerCase())
+    .filter((item) => allowed.has(item));
+
+  const uniqueRoles = Array.from(new Set(roles));
+  return uniqueRoles.length ? uniqueRoles : ['user'];
+}
+
+function toPrismaRoles(roles: string[]) {
+  return roles.map((role) => {
+    if (role === 'manager') return 'MANAGER';
+    if (role === 'warehouse') return 'WAREHOUSE';
+    return 'USER';
+  });
+}
+
+function toPrimaryRole(roles: string[]) {
+  if (roles.includes('manager')) return 'manager';
+  if (roles.includes('warehouse')) return 'warehouse';
+  return 'user';
+}
+
 function mapUser(user: any) {
+  const roles = Array.isArray(user.roles)
+    ? user.roles.map((role: string) => role.toLowerCase())
+    : [String(user.role || 'USER').toLowerCase()];
+
   return {
     id: user.id,
     employeeId: user.employeeId,
@@ -20,7 +50,8 @@ function mapUser(user: any) {
     department: user.department,
     jobTitle: user.jobTitle,
     operationalProject: user.department,
-    role: user.role.toLowerCase(),
+    role: toPrimaryRole(roles),
+    roles,
     status: user.status.toLowerCase(),
     avatar: user.avatar,
     undertaking: {
@@ -64,6 +95,7 @@ export async function POST(request: NextRequest) {
     const extension = normalizeText(body?.extension);
     const operationalProject = normalizeText(body?.operationalProject);
     const password = normalizeText(body?.password);
+    const roles = normalizeRoles(body?.roles);
 
     if (!fullName || !email || !mobile || !password) {
       return NextResponse.json({ error: 'البيانات المطلوبة غير مكتملة' }, { status: 400 });
@@ -87,7 +119,7 @@ export async function POST(request: NextRequest) {
         department: operationalProject || 'لا ينطبق',
         jobTitle: extension || '',
         passwordHash: password,
-        role: 'USER',
+        roles: toPrismaRoles(roles),
         status: 'ACTIVE',
       },
       include: {
