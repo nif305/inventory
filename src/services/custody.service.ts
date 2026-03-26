@@ -75,12 +75,12 @@ export const CustodyService = {
   },
 
   getStats: async () => {
-    const [active, overdue, returned, total] = await Promise.all([
+    const [active, returnRequested, returned, total] = await Promise.all([
       prisma.custodyRecord.count({
         where: { status: CustodyStatus.ACTIVE },
       }),
       prisma.custodyRecord.count({
-        where: { status: CustodyStatus.OVERDUE },
+        where: { status: CustodyStatus.RETURN_REQUESTED },
       }),
       prisma.custodyRecord.count({
         where: { status: CustodyStatus.RETURNED },
@@ -90,7 +90,7 @@ export const CustodyService = {
 
     return {
       active,
-      overdue,
+      returnRequested,
       returned,
       total,
     };
