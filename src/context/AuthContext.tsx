@@ -23,7 +23,6 @@ export type AppUser = {
   jobTitle?: string;
   operationalProject?: string;
   role: Role;
-  roles: Role[];
   status: Status;
   avatar?: string | null;
   createdAt?: string | null;
@@ -71,40 +70,7 @@ function normalizeStatus(status?: string | null): Status {
   return 'active';
 }
 
-function normalizeRoles(input: unknown): Role[] {
-  if (!Array.isArray(input)) return ['user'];
-
-  const roles = Array.from(
-    new Set(
-      input
-        .map((role) => normalizeRole(typeof role === 'string' ? role : 'user'))
-        .filter(Boolean)
-    )
-  ) as Role[];
-
-  if (!roles.includes('user')) {
-    roles.unshift('user');
-  }
-
-  return roles;
-}
-
-function pickPrimaryRole(roles: Role[], fallback?: string | null): Role {
-  const normalizedFallback = normalizeRole(fallback);
-
-  if (roles.includes(normalizedFallback)) {
-    return normalizedFallback;
-  }
-
-  if (roles.includes('manager')) return 'manager';
-  if (roles.includes('warehouse')) return 'warehouse';
-  return 'user';
-}
-
 function normalizeUser(user: any): AppUser {
-  const roles = normalizeRoles(user?.roles ?? [user?.role]);
-  const role = pickPrimaryRole(roles, user?.role);
-
   return {
     id: user?.id || '',
     employeeId: user?.employeeId || '',
@@ -115,8 +81,7 @@ function normalizeUser(user: any): AppUser {
     department: user?.department || '',
     jobTitle: user?.jobTitle || '',
     operationalProject: user?.operationalProject || user?.department || '',
-    role,
-    roles,
+    role: normalizeRole(user?.role),
     status: normalizeStatus(user?.status),
     avatar: user?.avatar || null,
     createdAt: user?.createdAt || null,
@@ -157,11 +122,6 @@ function loadStoredUser(key: string): AppUser | null {
   } catch {
     return null;
   }
-}
-
-function canSwitchToRole(originalUser: AppUser | null, role: Role): boolean {
-  if (!originalUser) return false;
-  return originalUser.roles.includes(role);
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -288,8 +248,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }).finally(() => {
       saveAuthUser(null);
       saveOriginalAuthUser(null);
-      setUser(null);
-      setOriginalUser(null);
       setAllUsers([]);
       window.location.replace('/login');
     });
@@ -298,7 +256,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const switchViewRole = useCallback(
     (role: Role) => {
       if (!originalUser) return;
-      if (!canSwitchToRole(originalUser, role)) return;
+
+      const allowed =
+        (originalUser.role === 'manager' &&
+          (role === 'manager' || role === 'warehouse' || role === 'user')) ||
+        (originalUser.role === 'warehouse' && (role === 'warehouse' || role === 'user'));
+
+      if (!allowed) return;
 
       const nextUser = { ...originalUser, role };
       setUser(nextUser);
@@ -314,7 +278,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       allUsers,
       loading,
       isAuthenticated: !!user,
-      canUseRoleSwitch: (originalUser?.roles?.length || 0) > 1,
+      canUseRoleSwitch:
+        originalUser?.role === 'manager' || originalUser?.role === 'warehouse',
       login,
       logout,
       refreshUsers,
