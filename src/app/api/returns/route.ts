@@ -20,9 +20,10 @@ async function resolveSessionUser(request: NextRequest) {
   const cookieEmployeeId = decodeURIComponent(
     request.cookies.get('user_employee_id')?.value || ''
   ).trim();
-  const cookieRole = decodeURIComponent(request.cookies.get('user_role')?.value || 'user').trim();
+  const activeRoleCookie = decodeURIComponent(request.cookies.get('active_role')?.value || '').trim();
+  const fallbackRoleCookie = decodeURIComponent(request.cookies.get('user_role')?.value || 'user').trim();
 
-  const role = mapRole(cookieRole);
+  const role = mapRole(activeRoleCookie || fallbackRoleCookie);
 
   let user = null;
 
@@ -83,7 +84,7 @@ async function resolveSessionUser(request: NextRequest) {
 
   return {
     id: user.id,
-    role: user.role || role,
+    role,
     department: user.department || cookieDepartment,
   };
 }
@@ -180,7 +181,7 @@ export async function PUT(request: NextRequest) {
     const body = await request.json();
 
     if (body.action === 'approve') {
-      if (session.role !== Role.MANAGER && session.role !== Role.WAREHOUSE) {
+      if (session.role !== Role.WAREHOUSE) {
         return NextResponse.json({ error: 'غير مصرح' }, { status: 403 });
       }
 
@@ -196,7 +197,7 @@ export async function PUT(request: NextRequest) {
     }
 
     if (body.action === 'reject') {
-      if (session.role !== Role.MANAGER && session.role !== Role.WAREHOUSE) {
+      if (session.role !== Role.WAREHOUSE) {
         return NextResponse.json({ error: 'غير مصرح' }, { status: 403 });
       }
 
