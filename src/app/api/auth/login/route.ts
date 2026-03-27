@@ -1,59 +1,46 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
-type UserRoleValue = 'USER' | 'WAREHOUSE' | 'MANAGER';
+function normalizeRoles(roleOrRoles: unknown): string[] {
+  if (Array.isArray(roleOrRoles)) {
+    const roles = roleOrRoles
+      .map((role) => String(role).toLowerCase())
+      .filter(Boolean);
 
-function normalizeEmail(value?: string | null) {
-  return (value || '').trim().toLowerCase();
-}
-
-function normalizeText(value?: string | null) {
-  return (value || '').trim();
-}
-
-function normalizeRoleValue(value?: string | null): UserRoleValue {
-  const normalized = (value || '').trim().toUpperCase();
-
-  if (normalized === 'MANAGER') return 'MANAGER';
-  if (normalized === 'WAREHOUSE') return 'WAREHOUSE';
-  return 'USER';
-}
-
-function normalizeRoles(values?: string[] | null): UserRoleValue[] {
-  const rawValues = Array.isArray(values) ? values : [];
-  const normalized = Array.from(
-    new Set(rawValues.map((value) => normalizeRoleValue(value)))
-  );
-
-  if (!normalized.includes('USER')) {
-    normalized.unshift('USER');
+    return roles.includes('user') ? Array.from(new Set(roles)) : ['user', ...Array.from(new Set(roles))];
   }
 
-  return normalized;
+  if (typeof roleOrRoles === 'string' && roleOrRoles.trim()) {
+    const role = roleOrRoles.toLowerCase();
+    return role === 'user' ? ['user'] : ['user', role];
+  }
+
+  return ['user'];
 }
 
-function getPrimaryRole(roles: UserRoleValue[]): UserRoleValue {
-  if (roles.includes('MANAGER')) return 'MANAGER';
-  if (roles.includes('WAREHOUSE')) return 'WAREHOUSE';
-  return 'USER';
+function getPrimaryRole(roles: string[]): string {
+  if (roles.includes('manager')) return 'manager';
+  if (roles.includes('warehouse')) return 'warehouse';
+  return 'user';
 }
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const email = normalizeEmail(body?.email);
-    const password = normalizeText(body?.password);
+    const email = String(body?.email || '').trim();
+    const password = String(body?.password || '').trim();
 
-    if (!email) {
-      return NextResponse.json({ error: 'يرجى إدخال البريد الإلكتروني' }, { status: 400 });
+    if (!email || !password) {
+      return NextResponse.json({ error: 'البريد الإلكتروني وكلمة المرور مطلوبان' }, { status: 400 });
     }
 
-    if (!password) {
-      return NextResponse.json({ error: 'يرجى إدخال كلمة المرور' }, { status: 400 });
-    }
-
-    const user = await prisma.user.findUnique({
-      where: { email },
+    const user = await prisma.user.findFirst({
+      where: {
+        email: {
+          equals: email,
+          mode: 'insensitive',
+        },
+      },
       include: {
         undertaking: true,
       },
@@ -63,24 +50,22 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'بيانات الدخول غير صحيحة' }, { status: 401 });
     }
 
-    if (user.status === 'DISABLED') {
-      return NextResponse.json({ error: 'الحساب موقوف' }, { status: 403 });
-    }
+    const passwordFields = [
+      (user as any).password,
+      (user as any).passwordHash,
+      (user as any).hashedPassword,
+    ].filter(Boolean);
 
-    if (user.passwordHash !== password) {
+    const isValidPassword = passwordFields.some((value) => String(value) === password);
+
+    if (!isValidPassword) {
       return NextResponse.json({ error: 'بيانات الدخول غير صحيحة' }, { status: 401 });
     }
 
-    const userRoles = normalizeRoles(
-      Array.isArray((user as { roles?: string[] }).roles)
-        ? (user as { roles?: string[] }).roles
-        : [String((user as { role?: string }).role || 'USER')]
-    );
-    const primaryRole = getPrimaryRole(userRoles);
-    const nowIso = new Date().toISOString();
+    const roles = normalizeRoles((user as any).roles ?? (user as any).role);
+    const primaryRole = getPrimaryRole(roles);
 
     const response = NextResponse.json({
-      ok: true,
       data: {
         id: user.id,
         employeeId: user.employeeId,
@@ -91,93 +76,38 @@ export async function POST(request: NextRequest) {
         department: user.department,
         jobTitle: user.jobTitle,
         operationalProject: user.department || '',
-        role: primaryRole.toLowerCase(),
-        roles: userRoles.map((role) => role.toLowerCase()),
-        status: user.status.toLowerCase(),
+        role: primaryRole,
+        roles,
+        status: String(user.status || 'ACTIVE').toLowerCase(),
         avatar: user.avatar,
-        createdAt: user.createdAt.toISOString(),
-        lastLoginAt: nowIso,
+        createdAt: user.createdAt?.toISOString?.() || null,
+        lastLoginAt: null,
         mustChangePassword: false,
         undertaking: {
           accepted: !!user.undertaking?.accepted,
-          acceptedAt: user.undertaking?.acceptedAt
-            ? user.undertaking.acceptedAt.toISOString()
-            : null,
+          acceptedAt: user.undertaking?.acceptedAt ? user.undertaking.acceptedAt.toISOString() : null,
         },
       },
     });
 
-    response.cookies.set('inventory_platform_session', 'active', {
-      httpOnly: true,
-      sameSite: 'lax',
+    const cookieOptions = {
+      httpOnly: true as const,
+      sameSite: 'lax' as const,
       secure: true,
       path: '/',
       maxAge: 60 * 60 * 24 * 7,
-    });
+    };
 
-    response.cookies.set('user_id', user.id, {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: true,
-      path: '/',
-      maxAge: 60 * 60 * 24 * 7,
-    });
-
-    response.cookies.set('user_role', primaryRole.toLowerCase(), {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: true,
-      path: '/',
-      maxAge: 60 * 60 * 24 * 7,
-    });
-
-    response.cookies.set('user_roles', JSON.stringify(userRoles.map((role) => role.toLowerCase())), {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: true,
-      path: '/',
-      maxAge: 60 * 60 * 24 * 7,
-    });
-
-    response.cookies.set('user_status', user.status.toLowerCase(), {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: true,
-      path: '/',
-      maxAge: 60 * 60 * 24 * 7,
-    });
-
-    response.cookies.set('user_email', user.email, {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: true,
-      path: '/',
-      maxAge: 60 * 60 * 24 * 7,
-    });
-
-    response.cookies.set('user_name', user.fullName, {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: true,
-      path: '/',
-      maxAge: 60 * 60 * 24 * 7,
-    });
-
-    response.cookies.set('user_department', user.department || '', {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: true,
-      path: '/',
-      maxAge: 60 * 60 * 24 * 7,
-    });
-
-    response.cookies.set('user_employee_id', user.employeeId || '', {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: true,
-      path: '/',
-      maxAge: 60 * 60 * 24 * 7,
-    });
+    response.cookies.set('inventory_platform_session', 'active', cookieOptions);
+    response.cookies.set('user_id', user.id, cookieOptions);
+    response.cookies.set('user_role', primaryRole, cookieOptions);
+    response.cookies.set('user_roles', JSON.stringify(roles), cookieOptions);
+    response.cookies.set('active_role', primaryRole, cookieOptions);
+    response.cookies.set('user_status', String(user.status || 'ACTIVE').toLowerCase(), cookieOptions);
+    response.cookies.set('user_email', user.email || '', cookieOptions);
+    response.cookies.set('user_name', user.fullName || '', cookieOptions);
+    response.cookies.set('user_department', user.department || '', cookieOptions);
+    response.cookies.set('user_employee_id', user.employeeId || '', cookieOptions);
 
     return response;
   } catch {
