@@ -22,9 +22,9 @@ async function resolveSessionUser(request: NextRequest) {
   const cookieEmployeeId = decodeURIComponent(
     request.cookies.get('user_employee_id')?.value || ''
   ).trim();
-  const effectiveRole = mapRole(
-    decodeURIComponent(request.cookies.get('user_role')?.value || 'user').trim()
-  );
+  const activeRoleCookie = decodeURIComponent(request.cookies.get('active_role')?.value || '').trim();
+  const fallbackRoleCookie = decodeURIComponent(request.cookies.get('user_role')?.value || 'user').trim();
+  const effectiveRole = mapRole(activeRoleCookie || fallbackRoleCookie);
 
   let user = null;
 
@@ -117,7 +117,7 @@ async function handleMutation(
       .toLowerCase();
 
     if (action === 'issue') {
-      if (session.role !== Role.WAREHOUSE && session.role !== Role.MANAGER) {
+      if (session.role !== Role.WAREHOUSE) {
         return NextResponse.json({ error: 'غير مصرح' }, { status: 403 });
       }
 
@@ -127,7 +127,7 @@ async function handleMutation(
     }
 
     if (action === 'reject') {
-      if (session.role !== Role.WAREHOUSE && session.role !== Role.MANAGER) {
+      if (session.role !== Role.WAREHOUSE) {
         return NextResponse.json({ error: 'غير مصرح' }, { status: 403 });
       }
 
