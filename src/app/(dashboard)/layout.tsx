@@ -548,7 +548,7 @@ export default function DashboardLayout({
                               : 'text-slate-600 hover:bg-white'
                           }`}
                         >
-                          مسؤول مخزن
+                          مسؤول المخزن
                         </button>
                       ) : null}
 
@@ -563,34 +563,6 @@ export default function DashboardLayout({
                         >
                           موظف
                         </button>
-                      ) : null}
-                    </div>
-                  ) : null}
-
-                      {originalUser?.role === 'warehouse' ? (
-                        <>
-                          <button
-                            onClick={() => switchViewRole('warehouse')}
-                            className={`flex-1 rounded-full px-3 py-2 text-[13px] leading-none transition sm:flex-none sm:px-4 ${
-                              user?.role === 'warehouse'
-                                ? 'bg-[#016564] text-white shadow-sm'
-                                : 'text-slate-600 hover:bg-white'
-                            }`}
-                          >
-                            مسؤول مخزن
-                          </button>
-
-                          <button
-                            onClick={() => switchViewRole('user')}
-                            className={`flex-1 rounded-full px-3 py-2 text-[13px] leading-none transition sm:flex-none sm:px-4 ${
-                              user?.role === 'user'
-                                ? 'bg-[#016564] text-white shadow-sm'
-                                : 'text-slate-600 hover:bg-white'
-                            }`}
-                          >
-                            موظف
-                          </button>
-                        </>
                       ) : null}
                     </div>
                   ) : null}
