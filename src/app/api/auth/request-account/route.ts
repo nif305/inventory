@@ -10,6 +10,18 @@ function normalizeEmail(value?: string | null) {
 }
 
 function mapUser(user: any) {
+  const roles = Array.isArray(user?.roles)
+    ? user.roles.map((role: any) => String(role).toLowerCase())
+    : user?.role
+      ? [String(user.role).toLowerCase()]
+      : ['user'];
+
+  const primaryRole = roles.includes('manager')
+    ? 'manager'
+    : roles.includes('warehouse')
+      ? 'warehouse'
+      : 'user';
+
   return {
     id: user.id,
     employeeId: user.employeeId,
@@ -20,8 +32,9 @@ function mapUser(user: any) {
     department: user.department,
     jobTitle: user.jobTitle,
     operationalProject: user.department,
-    role: user.role.toLowerCase(),
-    status: user.status.toLowerCase(),
+    role: primaryRole,
+    roles,
+    status: String(user.status || 'ACTIVE').toLowerCase(),
     avatar: user.avatar,
     undertaking: {
       accepted: !!user.undertaking?.accepted,
@@ -72,29 +85,51 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const newUser = await prisma.user.create({
-      data: {
-        employeeId: `USR-${Date.now()}`,
-        fullName,
-        email,
-        mobile,
-        department: operationalProject || 'لا ينطبق',
-        jobTitle: extension || '',
-        passwordHash: password,
-        role: 'USER',
-        status: 'ACTIVE',
-        avatar: null,
-        undertaking: {
-          create: {
-            accepted: true,
-            acceptedAt: new Date(),
-          },
+    const employeeId = `USR-${Date.now()}`;
+
+    const createPayload: any = {
+      employeeId,
+      fullName,
+      email,
+      mobile,
+      department: operationalProject || 'لا ينطبق',
+      jobTitle: extension || '',
+      passwordHash: password,
+      status: 'ACTIVE',
+      avatar: null,
+      undertaking: {
+        create: {
+          accepted: true,
+          acceptedAt: new Date(),
         },
       },
-      include: {
-        undertaking: true,
-      },
-    });
+    };
+
+    const userDelegate = prisma.user as any;
+
+    let newUser;
+
+    try {
+      newUser = await userDelegate.create({
+        data: {
+          ...createPayload,
+          roles: ['USER'],
+        },
+        include: {
+          undertaking: true,
+        },
+      });
+    } catch {
+      newUser = await userDelegate.create({
+        data: {
+          ...createPayload,
+          role: 'USER',
+        },
+        include: {
+          undertaking: true,
+        },
+      });
+    }
 
     return NextResponse.json(
       {
@@ -103,7 +138,10 @@ export async function POST(request: NextRequest) {
       },
       { status: 201 }
     );
-  } catch {
-    return NextResponse.json({ error: 'تعذر إنشاء الحساب' }, { status: 500 });
+  } catch (error: any) {
+    return NextResponse.json(
+      { error: error?.message || 'تعذر إنشاء الحساب' },
+      { status: 500 }
+    );
   }
 }
