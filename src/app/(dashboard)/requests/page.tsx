@@ -46,7 +46,7 @@ type RequestRow = {
   code: string;
   purpose: string;
   notes?: string | null;
-  status: 'PENDING' | 'REJECTED' | 'ISSUED';
+  status: 'PENDING' | 'REJECTED' | 'ISSUED' | 'RETURNED' | 'DRAFT';
   createdAt: string;
   rejectionReason?: string | null;
   requester?: {
@@ -65,7 +65,7 @@ type SelectedItem = {
 };
 
 type FormMode = 'create' | 'edit' | 'adjust';
-type WarehouseViewMode = 'new' | 'finished';
+type WarehouseViewMode = 'new' | 'finished' | 'returns';
 
 const STATUS_MAP: Record<
   string,
@@ -74,6 +74,8 @@ const STATUS_MAP: Record<
   PENDING: { label: 'جديد', variant: 'warning' },
   REJECTED: { label: 'ملغي / مرفوض', variant: 'danger' },
   ISSUED: { label: 'تم الصرف', variant: 'success' },
+  RETURNED: { label: 'تمت الإعادة', variant: 'neutral' },
+  DRAFT: { label: 'مسودة', variant: 'neutral' },
 };
 
 function formatDate(date?: string | null) {
@@ -276,14 +278,15 @@ export default function RequestsPage() {
   const sessionHeaders = useMemo(
     () => ({
       'Content-Type': 'application/json',
+      'x-active-role': user?.role || 'user',
     }),
-    []
+    [user?.role]
   );
 
   const fetchRequests = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/requests', { cache: 'no-store' });
+      const res = await fetch('/api/requests', { cache: 'no-store', credentials: 'include' });
       const data = await res.json();
       setRequests(Array.isArray(data?.data) ? data.data : []);
     } catch {
@@ -296,7 +299,7 @@ export default function RequestsPage() {
   const fetchInventory = useCallback(async () => {
     setInventoryLoading(true);
     try {
-      const res = await fetch('/api/inventory?limit=200', { cache: 'no-store' });
+      const res = await fetch('/api/inventory?limit=200', { cache: 'no-store', credentials: 'include' });
       const data = await res.json();
       setAvailableItems(Array.isArray(data?.data) ? data.data : []);
     } catch {
@@ -386,10 +389,12 @@ export default function RequestsPage() {
       pending: requests.filter((r) => r.status === 'PENDING').length,
       rejected: requests.filter((r) => r.status === 'REJECTED').length,
       issued: requests.filter((r) => r.status === 'ISSUED').length,
+      returned: requests.filter((r) => r.status === 'RETURNED').length,
       warehouseNew: requests.filter((r) => r.status === 'PENDING').length,
       warehouseFinished: requests.filter(
-        (r) => r.status === 'ISSUED' || r.status === 'REJECTED'
+        (r) => r.status === 'ISSUED' || r.status === 'RETURNED' || r.status === 'REJECTED'
       ).length,
+      warehouseReturns: requests.filter((r) => r.status === 'RETURNED').length,
     };
   }, [requests]);
 
@@ -400,7 +405,13 @@ export default function RequestsPage() {
       return requests.filter((r) => r.status === 'PENDING');
     }
 
-    return requests.filter((r) => r.status === 'ISSUED' || r.status === 'REJECTED');
+    if (warehouseViewMode === 'finished') {
+      return requests.filter(
+        (r) => r.status === 'ISSUED' || r.status === 'RETURNED' || r.status === 'REJECTED'
+      );
+    }
+
+    return requests.filter((r) => r.status === 'RETURNED');
   }, [requests, canUseWarehouseTabs, warehouseViewMode]);
 
   const filteredInventory = useMemo(() => {
@@ -504,6 +515,7 @@ export default function RequestsPage() {
   ) => {
     const res = await fetch(`/api/requests/${id}`, {
       method: 'PATCH',
+      credentials: 'include',
       headers: sessionHeaders,
       body: JSON.stringify({
         action,
@@ -525,6 +537,7 @@ export default function RequestsPage() {
   const handleEmployeeCancel = async (id: string) => {
     const res = await fetch(`/api/requests/${id}`, {
       method: 'PATCH',
+      credentials: 'include',
       headers: sessionHeaders,
       body: JSON.stringify({
         action: 'cancel',
@@ -586,6 +599,7 @@ export default function RequestsPage() {
       if (formMode === 'create') {
         res = await fetch('/api/requests', {
           method: 'POST',
+          credentials: 'include',
           headers: sessionHeaders,
           body: JSON.stringify({
             purpose,
@@ -682,11 +696,16 @@ export default function RequestsPage() {
 
           <Card className="rounded-2xl border border-[#d6d7d4] p-3 shadow-none">
             <div className="text-xs leading-5 text-[#6f7b7a]">
-              {canUseWarehouseTabs ? 'تم الصرف' : 'تم الصرف'}
+              {canUseWarehouseTabs ? 'طلبات أُعيدت' : 'تمت الإعادة'}
             </div>
             <div className="mt-1 text-xl font-extrabold text-[#498983]">
-              {stats.issued}
+              {canUseWarehouseTabs ? stats.warehouseReturns : stats.returned}
             </div>
+          </Card>
+
+          <Card className="rounded-2xl border border-[#d6d7d4] p-3 shadow-none">
+            <div className="text-xs leading-5 text-[#6f7b7a]">تم الصرف</div>
+            <div className="mt-1 text-xl font-extrabold text-[#016564]">{stats.issued}</div>
           </Card>
 
           <Card className="rounded-2xl border border-[#d6d7d4] p-3 shadow-none">
@@ -697,7 +716,7 @@ export default function RequestsPage() {
       </section>
 
       {canUseWarehouseTabs ? (
-        <section className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <section className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           <Button
             variant={warehouseViewMode === 'new' ? 'primary' : 'secondary'}
             onClick={() => setWarehouseViewMode('new')}
@@ -711,6 +730,13 @@ export default function RequestsPage() {
             className="w-full"
           >
             الطلبات المنتهية
+          </Button>
+          <Button
+            variant={warehouseViewMode === 'returns' ? 'primary' : 'secondary'}
+            onClick={() => setWarehouseViewMode('returns')}
+            className="w-full"
+          >
+            الطلبات المعادة
           </Button>
         </section>
       ) : null}

@@ -13,19 +13,22 @@ function mapRole(role: string): Role {
 async function resolveSessionUser(request: NextRequest) {
   const cookieId = decodeURIComponent(request.cookies.get('user_id')?.value || '').trim();
   const cookieEmail = decodeURIComponent(request.cookies.get('user_email')?.value || '').trim();
+  const cookieName = decodeURIComponent(
+    request.cookies.get('user_name')?.value || 'مستخدم النظام'
+  ).trim();
   const cookieDepartment = decodeURIComponent(
     request.cookies.get('user_department')?.value || 'إدارة عمليات التدريب'
   ).trim();
   const cookieEmployeeId = decodeURIComponent(
     request.cookies.get('user_employee_id')?.value || ''
   ).trim();
-
+  const headerActiveRole = request.headers.get('x-active-role') || '';
   const effectiveRole = mapRole(
-    decodeURIComponent(
-      request.cookies.get('server_active_role')?.value ||
-        request.cookies.get('active_role')?.value ||
-        request.cookies.get('user_role')?.value ||
-        'user'
+    String(
+      headerActiveRole ||
+      decodeURIComponent(request.cookies.get('server_active_role')?.value || '') ||
+      decodeURIComponent(request.cookies.get('active_role')?.value || '') ||
+      decodeURIComponent(request.cookies.get('user_role')?.value || 'user')
     ).trim()
   );
 
@@ -34,13 +37,7 @@ async function resolveSessionUser(request: NextRequest) {
   if (cookieId) {
     user = await prisma.user.findUnique({
       where: { id: cookieId },
-      select: {
-        id: true,
-        department: true,
-        email: true,
-        employeeId: true,
-        status: true,
-      },
+      select: { id: true, department: true, email: true, employeeId: true },
     });
   }
 
@@ -52,35 +49,19 @@ async function resolveSessionUser(request: NextRequest) {
           mode: 'insensitive',
         },
       },
-      select: {
-        id: true,
-        department: true,
-        email: true,
-        employeeId: true,
-        status: true,
-      },
+      select: { id: true, department: true, email: true, employeeId: true },
     });
   }
 
   if (!user && cookieEmployeeId) {
     user = await prisma.user.findUnique({
       where: { employeeId: cookieEmployeeId },
-      select: {
-        id: true,
-        department: true,
-        email: true,
-        employeeId: true,
-        status: true,
-      },
+      select: { id: true, department: true, email: true, employeeId: true },
     });
   }
 
   if (!user) {
     throw new Error('تعذر التحقق من المستخدم الحالي. أعد تسجيل الدخول ثم حاول مرة أخرى.');
-  }
-
-  if (user.status !== Status.ACTIVE) {
-    throw new Error('الحساب غير نشط.');
   }
 
   return {
@@ -113,7 +94,9 @@ async function handleMutation(
     const { id } = await params;
     const body = await request.json();
     const session = await resolveSessionUser(request);
-    const action = String(body?.action || '').trim().toLowerCase();
+    const action = String(body?.action || '')
+      .trim()
+      .toLowerCase();
 
     if (action === 'issue') {
       if (session.role !== Role.WAREHOUSE) {
@@ -184,8 +167,7 @@ async function handleMutation(
     return NextResponse.json({ error: 'إجراء غير صالح' }, { status: 400 });
   } catch (error: any) {
     const statusCode =
-      error?.message === 'تعذر التحقق من المستخدم الحالي. أعد تسجيل الدخول ثم حاول مرة أخرى.' ||
-      error?.message === 'الحساب غير نشط.'
+      error?.message === 'تعذر التحقق من المستخدم الحالي. أعد تسجيل الدخول ثم حاول مرة أخرى.'
         ? 401
         : 400;
 
