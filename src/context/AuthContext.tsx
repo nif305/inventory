@@ -50,7 +50,7 @@ type AuthContextType = {
   login: (email: string, password: string) => Promise<void>;
   logout: () => void;
   refreshUsers: () => Promise<void>;
-  switchViewRole: (role: Role) => void;
+  switchViewRole: (role: Role) => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -148,13 +148,18 @@ function loadStoredUser(key: string): AppUser | null {
   }
 }
 
-function syncRoleCookies(role: Role, roles: Role[]) {
-  if (typeof document === 'undefined') return;
+async function persistActiveRole(role: Role) {
+  const response = await fetch('/api/auth/switch-role', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ role }),
+  });
 
-  const maxAge = 60 * 60 * 24 * 7;
-  document.cookie = `active_role=${role}; path=/; max-age=${maxAge}; samesite=lax`;
-  document.cookie = `user_role=${role}; path=/; max-age=${maxAge}; samesite=lax`;
-  document.cookie = `user_roles=${encodeURIComponent(JSON.stringify(roles))}; path=/; max-age=${maxAge}; samesite=lax`;
+  if (!response.ok) {
+    const json = await response.json().catch(() => ({}));
+    throw new Error(json?.error || 'تعذر تحديث الدور النشط');
+  }
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -214,7 +219,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
           saveStoredUser(AUTH_STORAGE_KEY, effectiveUser);
           saveStoredUser(AUTH_ORIGINAL_STORAGE_KEY, normalizedFromApi);
-          syncRoleCookies(effectiveCurrentRole, normalizedFromApi.roles);
         } else {
           setUser(null);
           setOriginalUser(null);
@@ -276,7 +280,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setOriginalUser(normalized);
     saveStoredUser(AUTH_STORAGE_KEY, normalized);
     saveStoredUser(AUTH_ORIGINAL_STORAGE_KEY, normalized);
-    syncRoleCookies(normalized.role, normalized.roles);
   }, []);
 
   const logout = useCallback(() => {
@@ -293,9 +296,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const switchViewRole = useCallback(
-    (role: Role) => {
+    async (role: Role) => {
       if (!originalUser) return;
       if (!originalUser.roles.includes(role)) return;
+
+      await persistActiveRole(role);
 
       const nextUser: AppUser = {
         ...originalUser,
@@ -304,7 +309,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
       setUser(nextUser);
       saveStoredUser(AUTH_STORAGE_KEY, nextUser);
-      syncRoleCookies(role, originalUser.roles);
     },
     [originalUser]
   );
