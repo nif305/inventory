@@ -6,19 +6,22 @@ import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { useAuth } from '@/context/AuthContext';
-import {
-  InventoryNotification,
-  NOTIFICATIONS_UPDATED_EVENT,
-  loadNotifications,
-  markAllNotificationsRead,
-  markNotificationRead,
-} from '@/lib/notifications';
+import { NOTIFICATIONS_UPDATED_EVENT } from '@/lib/notifications';
 
 type FilterKey = 'ALL' | 'UNREAD' | 'ALERT' | 'NOTIFICATION' | 'CRITICAL' | 'ACTION';
 
-type NotificationMeta = InventoryNotification & {
+type NotificationMeta = {
+  id: string;
+  title: string;
+  message: string;
+  link?: string | null;
   entityType?: string | null;
   entityId?: string | null;
+  isRead: boolean;
+  createdAt: string;
+  type?: string | null;
+  kind?: 'alert' | 'notification';
+  severity?: 'info' | 'action' | 'critical';
 };
 
 function formatDate(date?: string) {
@@ -49,11 +52,28 @@ function normalizeArabic(value: string) {
     .replace(/\s+/g, ' ');
 }
 
-function typeLabel(item: InventoryNotification) {
+function normalizeNotification(item: NotificationMeta): NotificationMeta {
+  const type = String(item.type || '').toUpperCase();
+  const entityType = String(item.entityType || '').toLowerCase();
+
+  const severity =
+    type.includes('CRITICAL') || type.includes('OUT_OF_STOCK')
+      ? 'critical'
+      : type.includes('LOW_STOCK') || type.includes('NEW_') || type.includes('PENDING')
+      ? 'action'
+      : 'info';
+
+  const kind =
+    severity === 'critical' || severity === 'action' || entityType === 'message' ? 'alert' : 'notification';
+
+  return { ...item, severity, kind };
+}
+
+function typeLabel(item: NotificationMeta) {
   return item.kind === 'alert' ? 'تنبيه' : 'إشعار';
 }
 
-function severityLabel(item: InventoryNotification) {
+function severityLabel(item: NotificationMeta) {
   if (item.severity === 'critical') return 'حرج';
   if (item.severity === 'action') return 'إجراء';
   return 'معلوماتي';
@@ -101,20 +121,36 @@ export default function NotificationsPage() {
   const { user } = useAuth();
   const [filter, setFilter] = useState<FilterKey>('ALL');
   const [search, setSearch] = useState('');
-  const [items, setItems] = useState<InventoryNotification[]>([]);
+  const [items, setItems] = useState<NotificationMeta[]>([]);
 
   useEffect(() => {
     if (!user?.id) return;
 
-    const refresh = () => setItems(loadNotifications(user.id));
+    let mounted = true;
+
+    const refresh = async () => {
+      const response = await fetch('/api/notifications', {
+        cache: 'no-store',
+        credentials: 'include',
+      }).catch(() => null);
+
+      const json = response ? await response.json().catch(() => null) : null;
+      if (!mounted) return;
+      const rows = Array.isArray(json?.data) ? json.data.map(normalizeNotification) : [];
+      setItems(rows);
+    };
+
     refresh();
 
     window.addEventListener(NOTIFICATIONS_UPDATED_EVENT, refresh);
     window.addEventListener('storage', refresh);
+    window.addEventListener('focus', refresh);
 
     return () => {
+      mounted = false;
       window.removeEventListener(NOTIFICATIONS_UPDATED_EVENT, refresh);
       window.removeEventListener('storage', refresh);
+      window.removeEventListener('focus', refresh);
     };
   }, [user?.id]);
 
@@ -154,25 +190,38 @@ export default function NotificationsPage() {
     });
   }, [filter, items, search]);
 
-  const handleMarkAllRead = () => {
-    if (!user?.id) return;
-    markAllNotificationsRead(user.id);
-    setItems(loadNotifications(user.id));
+  const handleMarkAllRead = async () => {
+    const unread = items.filter((item) => !item.isRead);
+    await Promise.all(
+      unread.map((item) =>
+        fetch('/api/notifications', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ id: item.id }),
+        }).catch(() => null)
+      )
+    );
+
+    setItems((prev) => prev.map((item) => ({ ...item, isRead: true })));
   };
 
-  const handleMarkRead = (id: string) => {
-    markNotificationRead(id);
-    if (user?.id) setItems(loadNotifications(user.id));
+  const handleMarkRead = async (id: string) => {
+    await fetch('/api/notifications', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ id }),
+    }).catch(() => null);
+
+    setItems((prev) => prev.map((item) => (item.id === id ? { ...item, isRead: true } : item)));
   };
 
-  const handleOpenItem = (item: InventoryNotification) => {
+  const handleOpenItem = async (item: NotificationMeta) => {
     const target = resolveItemLink(item);
 
     if (!item.isRead) {
-      markNotificationRead(item.id);
-      if (user?.id) {
-        setItems(loadNotifications(user.id));
-      }
+      await handleMarkRead(item.id);
     }
 
     if (target) {

@@ -3,21 +3,43 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import {
-  InventoryNotification,
-  NOTIFICATIONS_UPDATED_EVENT,
-  NOTIFICATION_TOAST_EVENT,
-  loadNotifications,
-  markAllNotificationsRead,
-  markNotificationRead,
-} from '@/lib/notifications';
+import { NOTIFICATIONS_UPDATED_EVENT } from '@/lib/notifications';
 
-function isUrgentCenterItem(item: InventoryNotification) {
+type ServerNotification = {
+  id: string;
+  title: string;
+  message: string;
+  link?: string | null;
+  entityId?: string | null;
+  entityType?: string | null;
+  isRead: boolean;
+  createdAt: string;
+  type?: string | null;
+};
+
+function normalizeNotification(item: ServerNotification) {
+  const type = String(item.type || '').toUpperCase();
+  const entityType = String(item.entityType || '').toLowerCase();
+
+  const severity =
+    type.includes('CRITICAL') || type.includes('OUT_OF_STOCK')
+      ? 'critical'
+      : type.includes('LOW_STOCK') || type.includes('NEW_') || type.includes('PENDING')
+      ? 'action'
+      : 'info';
+
+  const kind =
+    severity === 'critical' || severity === 'action' || entityType === 'message' ? 'alert' : 'notification';
+
+  return { ...item, severity, kind };
+}
+
+function isUrgentCenterItem(item: ReturnType<typeof normalizeNotification>) {
   const entityType = String(item.entityType || '').toLowerCase();
   return item.severity === 'critical' || item.kind === 'alert' || entityType === 'message';
 }
 
-function resolveItemLink(item: InventoryNotification): string | null {
+function resolveItemLink(item: ReturnType<typeof normalizeNotification>): string | null {
   const entityType = String(item.entityType || '').toLowerCase();
 
   if (item.link && item.link !== '/notifications') return item.link;
@@ -51,45 +73,72 @@ function formatRelative(value?: string | null) {
 export function NotificationBell({ userId }: { userId: string }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [items, setItems] = useState<InventoryNotification[]>([]);
-  const [toasts, setToasts] = useState<InventoryNotification[]>([]);
+  const [items, setItems] = useState<ReturnType<typeof normalizeNotification>[]>([]);
+  const [toasts, setToasts] = useState<ReturnType<typeof normalizeNotification>[]>([]);
 
   const unreadCount = useMemo(() => items.filter((item) => !item.isRead).length, [items]);
 
   useEffect(() => {
-    const refresh = () => setItems(loadNotifications(userId));
+    let mounted = true;
+
+    const refresh = async () => {
+      const response = await fetch('/api/notifications', {
+        cache: 'no-store',
+        credentials: 'include',
+      }).catch(() => null);
+
+      const json = response ? await response.json().catch(() => null) : null;
+      if (!mounted) return;
+      const rows = Array.isArray(json?.data) ? json.data.map(normalizeNotification) : [];
+      setItems(rows);
+    };
+
     refresh();
 
     const handleUpdated = () => refresh();
 
-    const handleToast = (event: Event) => {
-      const detail = (event as CustomEvent<InventoryNotification>).detail;
-      if (!detail || detail.userId !== userId) return;
-      if (isUrgentCenterItem(detail)) return;
-
-      setToasts((prev) => [detail, ...prev].slice(0, 3));
-      refresh();
-
-      window.setTimeout(() => {
-        setToasts((prev) => prev.filter((item) => item.id !== detail.id));
-      }, 5000);
+    const handleToast = async () => {
+      await refresh();
     };
 
     window.addEventListener(NOTIFICATIONS_UPDATED_EVENT, handleUpdated);
-    window.addEventListener(NOTIFICATION_TOAST_EVENT, handleToast as EventListener);
     window.addEventListener('storage', handleUpdated);
+    window.addEventListener('focus', handleUpdated);
+    window.addEventListener('inventory-notification-toast', handleToast as EventListener);
 
     return () => {
+      mounted = false;
       window.removeEventListener(NOTIFICATIONS_UPDATED_EVENT, handleUpdated);
-      window.removeEventListener(NOTIFICATION_TOAST_EVENT, handleToast as EventListener);
       window.removeEventListener('storage', handleUpdated);
+      window.removeEventListener('focus', handleUpdated);
+      window.removeEventListener('inventory-notification-toast', handleToast as EventListener);
     };
   }, [userId]);
 
-  const handleOpenItem = (item: InventoryNotification) => {
+  useEffect(() => {
+    const latestUrgent = items.filter((item) => !item.isRead && !isUrgentCenterItem(item)).slice(0, 3);
+    setToasts(latestUrgent);
+  }, [items]);
+
+  const markOneRead = async (id: string) => {
+    await fetch('/api/notifications', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ id }),
+    }).catch(() => null);
+
+    setItems((prev) => prev.map((item) => (item.id === id ? { ...item, isRead: true } : item)));
+  };
+
+  const markAllRead = async () => {
+    const unread = items.filter((item) => !item.isRead);
+    await Promise.all(unread.map((item) => markOneRead(item.id)));
+  };
+
+  const handleOpenItem = async (item: ReturnType<typeof normalizeNotification>) => {
     if (!item.isRead) {
-      markNotificationRead(item.id);
-      setItems(loadNotifications(userId));
+      await markOneRead(item.id);
     }
 
     const target = resolveItemLink(item);
@@ -148,20 +197,8 @@ export function NotificationBell({ userId }: { userId: string }) {
               </div>
 
               <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    markAllNotificationsRead(userId);
-                    setItems(loadNotifications(userId));
-                  }}
-                  className="text-xs text-[#016564]"
-                >
-                  تعليم الكل كمقروء
-                </button>
-
-                <Link href="/notifications" className="text-xs text-slate-500" onClick={() => setOpen(false)}>
-                  عرض الكل
-                </Link>
+                <button type="button" onClick={markAllRead} className="text-xs text-[#016564]">تعليم الكل كمقروء</button>
+                <Link href="/notifications" className="text-xs text-slate-500" onClick={() => setOpen(false)}>عرض الكل</Link>
               </div>
             </div>
 

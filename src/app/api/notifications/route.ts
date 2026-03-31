@@ -1,78 +1,42 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { PrismaClient, Role, Status } from '@prisma/client';
+import { PrismaClient, Status } from '@prisma/client';
 
 const prisma = new PrismaClient();
-
-function mapRole(role: string): Role {
-  const normalized = String(role || '').trim().toLowerCase();
-  if (normalized === 'manager') return Role.MANAGER;
-  if (normalized === 'warehouse') return Role.WAREHOUSE;
-  return Role.USER;
-}
 
 async function resolveSessionUser(request: NextRequest) {
   const cookieId = decodeURIComponent(request.cookies.get('user_id')?.value || '').trim();
   const cookieEmail = decodeURIComponent(request.cookies.get('user_email')?.value || '').trim();
-  const cookieName = decodeURIComponent(request.cookies.get('user_name')?.value || 'مستخدم النظام').trim();
-  const cookieDepartment = decodeURIComponent(
-    request.cookies.get('user_department')?.value || 'إدارة عمليات التدريب'
-  ).trim();
-  const cookieEmployeeId = decodeURIComponent(
-    request.cookies.get('user_employee_id')?.value || ''
-  ).trim();
-  const cookieRole = decodeURIComponent(request.cookies.get('user_role')?.value || 'user').trim();
-
-  const role = mapRole(cookieRole);
+  const cookieEmployeeId = decodeURIComponent(request.cookies.get('user_employee_id')?.value || '').trim();
 
   let user = null;
 
   if (cookieId) {
     user = await prisma.user.findUnique({
       where: { id: cookieId },
-      select: { id: true, role: true, fullName: true, department: true, email: true, employeeId: true },
+      select: { id: true, status: true },
     });
   }
 
   if (!user && cookieEmail) {
     user = await prisma.user.findFirst({
       where: { email: { equals: cookieEmail, mode: 'insensitive' } },
-      select: { id: true, role: true, fullName: true, department: true, email: true, employeeId: true },
+      select: { id: true, status: true },
     });
   }
 
   if (!user && cookieEmployeeId) {
     user = await prisma.user.findUnique({
       where: { employeeId: cookieEmployeeId },
-      select: { id: true, role: true, fullName: true, department: true, email: true, employeeId: true },
+      select: { id: true, status: true },
     });
   }
 
   if (!user) {
-    const safeEmployeeId = cookieEmployeeId || `EMP-${Date.now()}`;
-    const safeEmail = cookieEmail || `${safeEmployeeId.toLowerCase()}@agency.local`;
+    throw new Error('تعذر التحقق من المستخدم الحالي. أعد تسجيل الدخول ثم حاول مرة أخرى.');
+  }
 
-    user = await prisma.user.upsert({
-      where: { employeeId: safeEmployeeId },
-      update: {
-        fullName: cookieName,
-        email: safeEmail,
-        department: cookieDepartment,
-        role,
-        status: Status.ACTIVE,
-      },
-      create: {
-        employeeId: safeEmployeeId,
-        fullName: cookieName,
-        email: safeEmail,
-        mobile: '0500000000',
-        department: cookieDepartment,
-        jobTitle: 'مستخدم',
-        passwordHash: 'local-auth',
-        role,
-        status: Status.ACTIVE,
-      },
-      select: { id: true, role: true, fullName: true, department: true, email: true, employeeId: true },
-    });
+  if (user.status !== Status.ACTIVE) {
+    throw new Error('الحساب غير نشط.');
   }
 
   return user;
@@ -90,7 +54,13 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ data });
   } catch (error: any) {
-    return NextResponse.json({ error: error.message || 'تعذر جلب الإشعارات' }, { status: 500 });
+    const statusCode =
+      error?.message === 'تعذر التحقق من المستخدم الحالي. أعد تسجيل الدخول ثم حاول مرة أخرى.' ||
+      error?.message === 'الحساب غير نشط.'
+        ? 401
+        : 500;
+
+    return NextResponse.json({ error: error.message || 'تعذر جلب الإشعارات' }, { status: statusCode });
   }
 }
 
@@ -114,6 +84,12 @@ export async function PATCH(request: NextRequest) {
 
     return NextResponse.json(result);
   } catch (error: any) {
-    return NextResponse.json({ error: error.message || 'تعذر تحديث الإشعار' }, { status: 400 });
+    const statusCode =
+      error?.message === 'تعذر التحقق من المستخدم الحالي. أعد تسجيل الدخول ثم حاول مرة أخرى.' ||
+      error?.message === 'الحساب غير نشط.'
+        ? 401
+        : 400;
+
+    return NextResponse.json({ error: error.message || 'تعذر تحديث الإشعار' }, { status: statusCode });
   }
 }

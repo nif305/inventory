@@ -10,7 +10,7 @@ type AppRole = 'manager' | 'warehouse' | 'user';
 type RequestRow = {
   id: string;
   code?: string;
-  status: 'PENDING' | 'REJECTED' | 'ISSUED';
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'ISSUED' | 'RETURNED' | 'DRAFT';
   createdAt?: string;
   requesterId?: string;
   requester?: {
@@ -56,7 +56,7 @@ type CustodyItem = {
   assignedToUserName: string;
   assignedDate: string;
   dueDate?: string | null;
-  status: 'ACTIVE' | 'RETURN_REQUESTED' | 'RETURNED';
+  status: 'ACTIVE' | 'DUE_SOON' | 'OVERDUE' | 'RETURN_REQUESTED' | 'RETURNED';
 };
 
 type NotificationItem = {
@@ -86,20 +86,6 @@ type FocusRow = {
   level: 'critical' | 'warning' | 'normal' | 'primary' | 'secondary';
 };
 
-const RETURNS_STORAGE_KEY = 'inventory_returns';
-const CUSTODY_STORAGE_KEY = 'inventory_custody_items';
-const NOTIFICATIONS_STORAGE_KEY = 'inventory_notifications';
-
-function loadLocal<T>(key: string): T[] {
-  if (typeof window === 'undefined') return [];
-  try {
-    const raw = localStorage.getItem(key);
-    const parsed = raw ? JSON.parse(raw) : [];
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
 
 function formatRelative(value?: string | null) {
   if (!value) return '—';
@@ -367,21 +353,27 @@ function WarehouseDashboard({ fullName }: { fullName?: string }) {
     let mounted = true;
 
     const load = async () => {
-      const [requestsRes, inventoryRes] = await Promise.all([
-        fetch('/api/requests', { cache: 'no-store' }),
-        fetch('/api/inventory?limit=300', { cache: 'no-store' }),
+      const [requestsRes, inventoryRes, returnsRes, custodyRes, notificationsRes] = await Promise.all([
+        fetch('/api/requests', { cache: 'no-store', credentials: 'include' }),
+        fetch('/api/inventory?limit=300', { cache: 'no-store', credentials: 'include' }),
+        fetch('/api/returns', { cache: 'no-store', credentials: 'include' }),
+        fetch('/api/custody', { cache: 'no-store', credentials: 'include' }),
+        fetch('/api/notifications', { cache: 'no-store', credentials: 'include' }),
       ]);
 
       const requestsJson = await requestsRes.json().catch(() => null);
       const inventoryJson = await inventoryRes.json().catch(() => null);
+      const returnsJson = await returnsRes.json().catch(() => null);
+      const custodyJson = await custodyRes.json().catch(() => null);
+      const notificationsJson = await notificationsRes.json().catch(() => null);
 
       if (!mounted) return;
 
       setRequests(Array.isArray(requestsJson?.data) ? requestsJson.data : []);
       setInventory(Array.isArray(inventoryJson?.data) ? inventoryJson.data : []);
-      setReturns(loadLocal<ReturnRequest>(RETURNS_STORAGE_KEY));
-      setCustody(loadLocal<CustodyItem>(CUSTODY_STORAGE_KEY));
-      setNotifications(loadLocal<NotificationItem>(NOTIFICATIONS_STORAGE_KEY));
+      setReturns(Array.isArray(returnsJson?.data) ? returnsJson.data : []);
+      setCustody(Array.isArray(custodyJson?.data) ? custodyJson.data : []);
+      setNotifications(Array.isArray(notificationsJson?.data) ? notificationsJson.data : []);
     };
 
     load();
@@ -392,9 +384,9 @@ function WarehouseDashboard({ fullName }: { fullName?: string }) {
 
   const stats = useMemo(() => {
     const pendingRequests = requests.filter((item) => item.status === 'PENDING').length;
-    const approvedRequests = requests.filter((item) => item.status === 'ISSUED').length;
+    const approvedRequests = requests.filter((item) => item.status === 'APPROVED').length;
     const pendingReturns = returns.filter((item) => item.status === 'PENDING').length;
-    const overdueCustody = custody.filter((item) => item.status !== 'RETURNED' && daysLate(item.dueDate) > 0).length;
+    const overdueCustody = custody.filter((item) => item.status === 'OVERDUE' || daysLate(item.dueDate) > 0).length;
     const lowStock = inventory.filter((item) => item.status === 'LOW_STOCK').length;
     const outOfStock = inventory.filter((item) => item.status === 'OUT_OF_STOCK').length;
     const totalAlerts = notifications.filter((item) => !item.isRead).length;
@@ -668,25 +660,31 @@ function ManagerDashboard({ fullName }: { fullName?: string }) {
     let mounted = true;
 
     const load = async () => {
-      const [requestsRes, inventoryRes, auditRes, suggestionsRes] = await Promise.all([
-        fetch('/api/requests', { cache: 'no-store' }),
-        fetch('/api/inventory?limit=200', { cache: 'no-store' }),
-        fetch('/api/audit-logs?limit=20', { cache: 'no-store' }).catch(() => null),
-        fetch('/api/suggestions', { cache: 'no-store' }).catch(() => null),
+      const [requestsRes, inventoryRes, auditRes, suggestionsRes, returnsRes, custodyRes, notificationsRes] = await Promise.all([
+        fetch('/api/requests', { cache: 'no-store', credentials: 'include' }),
+        fetch('/api/inventory?limit=200', { cache: 'no-store', credentials: 'include' }),
+        fetch('/api/audit-logs?limit=20', { cache: 'no-store', credentials: 'include' }).catch(() => null),
+        fetch('/api/suggestions', { cache: 'no-store', credentials: 'include' }).catch(() => null),
+        fetch('/api/returns', { cache: 'no-store', credentials: 'include' }),
+        fetch('/api/custody', { cache: 'no-store', credentials: 'include' }),
+        fetch('/api/notifications', { cache: 'no-store', credentials: 'include' }),
       ]);
 
       const requestsJson = await requestsRes.json().catch(() => null);
       const inventoryJson = await inventoryRes.json().catch(() => null);
       const auditJson = auditRes ? await auditRes.json().catch(() => null) : null;
       const suggestionsJson = suggestionsRes ? await suggestionsRes.json().catch(() => null) : null;
+      const returnsJson = await returnsRes.json().catch(() => null);
+      const custodyJson = await custodyRes.json().catch(() => null);
+      const notificationsJson = await notificationsRes.json().catch(() => null);
 
       if (!mounted) return;
 
       setRequests(Array.isArray(requestsJson?.data) ? requestsJson.data : []);
       setInventory(Array.isArray(inventoryJson?.data) ? inventoryJson.data : []);
-      setReturns(loadLocal<ReturnRequest>(RETURNS_STORAGE_KEY));
-      setCustody(loadLocal<CustodyItem>(CUSTODY_STORAGE_KEY));
-      setNotifications(loadLocal<NotificationItem>(NOTIFICATIONS_STORAGE_KEY));
+      setReturns(Array.isArray(returnsJson?.data) ? returnsJson.data : []);
+      setCustody(Array.isArray(custodyJson?.data) ? custodyJson.data : []);
+      setNotifications(Array.isArray(notificationsJson?.data) ? notificationsJson.data : []);
       setAuditLogs(Array.isArray(auditJson?.data) ? auditJson.data : []);
       setSuggestions(Array.isArray(suggestionsJson?.data) ? suggestionsJson.data : []);
     };
@@ -699,10 +697,10 @@ function ManagerDashboard({ fullName }: { fullName?: string }) {
 
   const mainStats = useMemo(() => {
     const materialPending = requests.filter((item) => item.status === 'PENDING').length;
-    const materialApprovedNotIssued = requests.filter((item) => item.status === 'ISSUED').length;
+    const materialApprovedNotIssued = requests.filter((item) => item.status === 'APPROVED').length;
     const pendingReturns = returns.filter((item) => item.status === 'PENDING').length;
     const unclosedReturns = returns.filter((item) => item.status === 'APPROVED' || item.status === 'PENDING').length;
-    const overdueCustody = custody.filter((item) => item.status !== 'RETURNED' && daysLate(item.dueDate) > 0).length;
+    const overdueCustody = custody.filter((item) => item.status === 'OVERDUE' || daysLate(item.dueDate) > 0).length;
     const lowStock = inventory.filter((item) => item.status === 'LOW_STOCK').length;
     const outOfStock = inventory.filter((item) => item.status === 'OUT_OF_STOCK').length;
 
@@ -1192,21 +1190,27 @@ function UserDashboard({ fullName, userId }: { fullName?: string; userId?: strin
     let mounted = true;
 
     const load = async () => {
-      const [requestsRes, suggestionsRes] = await Promise.all([
-        fetch('/api/requests', { cache: 'no-store' }),
-        fetch('/api/suggestions', { cache: 'no-store' }).catch(() => null),
+      const [requestsRes, suggestionsRes, returnsRes, custodyRes, notificationsRes] = await Promise.all([
+        fetch('/api/requests', { cache: 'no-store', credentials: 'include' }),
+        fetch('/api/suggestions', { cache: 'no-store', credentials: 'include' }).catch(() => null),
+        fetch('/api/returns', { cache: 'no-store', credentials: 'include' }),
+        fetch('/api/custody', { cache: 'no-store', credentials: 'include' }),
+        fetch('/api/notifications', { cache: 'no-store', credentials: 'include' }),
       ]);
 
       const requestsJson = await requestsRes.json().catch(() => null);
       const suggestionsJson = suggestionsRes ? await suggestionsRes.json().catch(() => null) : null;
+      const returnsJson = await returnsRes.json().catch(() => null);
+      const custodyJson = await custodyRes.json().catch(() => null);
+      const notificationsJson = await notificationsRes.json().catch(() => null);
 
       if (!mounted) return;
 
       setRequests(Array.isArray(requestsJson?.data) ? requestsJson.data : []);
       setSuggestions(Array.isArray(suggestionsJson?.data) ? suggestionsJson.data : []);
-      setReturnsList(loadLocal<ReturnRequest>(RETURNS_STORAGE_KEY));
-      setCustodyList(loadLocal<CustodyItem>(CUSTODY_STORAGE_KEY));
-      setNotifications(loadLocal<NotificationItem>(NOTIFICATIONS_STORAGE_KEY));
+      setReturnsList(Array.isArray(returnsJson?.data) ? returnsJson.data : []);
+      setCustodyList(Array.isArray(custodyJson?.data) ? custodyJson.data : []);
+      setNotifications(Array.isArray(notificationsJson?.data) ? notificationsJson.data : []);
     };
 
     load();
@@ -1251,11 +1255,11 @@ function UserDashboard({ fullName, userId }: { fullName?: string; userId?: strin
 
   const stats = useMemo(() => {
     return {
-      openRequests: myRequests.filter((item) => item.status === 'PENDING').length,
+      openRequests: myRequests.filter((item) => item.status === 'PENDING' || item.status === 'APPROVED').length,
       activeCustody: myCustody.filter((item) => item.status !== 'RETURNED').length,
       pendingReturns: myReturns.filter((item) => item.status === 'PENDING').length,
       unreadNotifications: myNotifications.filter((item) => !item.isRead).length,
-      overdueCustody: myCustody.filter((item) => item.status !== 'RETURNED' && daysLate(item.dueDate) > 0).length,
+      overdueCustody: myCustody.filter((item) => item.status === 'OVERDUE' || daysLate(item.dueDate) > 0).length,
       serviceOpen:
         serviceCounts.maintenance +
         serviceCounts.cleaning +
@@ -1361,7 +1365,7 @@ function UserDashboard({ fullName, userId }: { fullName?: string; userId?: strin
               : 'normal',
         })),
       ...myCustody
-        .filter((item) => item.status !== 'RETURNED' && daysLate(item.dueDate) > 0)
+        .filter((item) => item.status === 'OVERDUE' || daysLate(item.dueDate) > 0)
         .slice(0, 2)
         .map((item) => ({
           id: `cus-${item.id}`,
