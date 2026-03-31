@@ -3,10 +3,7 @@ import { prisma } from '@/lib/prisma';
 
 function normalizeRoles(roleOrRoles: unknown): string[] {
   if (Array.isArray(roleOrRoles)) {
-    const roles = roleOrRoles
-      .map((role) => String(role).toLowerCase())
-      .filter(Boolean);
-
+    const roles = roleOrRoles.map((role) => String(role).toLowerCase()).filter(Boolean);
     return roles.includes('user') ? Array.from(new Set(roles)) : ['user', ...Array.from(new Set(roles))];
   }
 
@@ -103,6 +100,8 @@ export async function POST(request: NextRequest) {
     response.cookies.set('user_role', primaryRole, cookieOptions);
     response.cookies.set('user_roles', JSON.stringify(roles), cookieOptions);
     response.cookies.set('active_role', primaryRole, cookieOptions);
+    response.cookies.set('server_active_role', primaryRole, cookieOptions);
+    response.cookies.set('server_user_roles', JSON.stringify(roles), cookieOptions);
     response.cookies.set('user_status', String(user.status || 'ACTIVE').toLowerCase(), cookieOptions);
     response.cookies.set('user_email', user.email || '', cookieOptions);
     response.cookies.set('user_name', user.fullName || '', cookieOptions);

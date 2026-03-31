@@ -22,7 +22,8 @@ async function resolveSessionUser(request: NextRequest) {
 
   const effectiveRole = mapRole(
     decodeURIComponent(
-      request.cookies.get('active_role')?.value ||
+      request.cookies.get('server_active_role')?.value ||
+        request.cookies.get('active_role')?.value ||
         request.cookies.get('user_role')?.value ||
         'user'
     ).trim()
@@ -112,9 +113,7 @@ async function handleMutation(
     const { id } = await params;
     const body = await request.json();
     const session = await resolveSessionUser(request);
-    const action = String(body?.action || '')
-      .trim()
-      .toLowerCase();
+    const action = String(body?.action || '').trim().toLowerCase();
 
     if (action === 'issue') {
       if (session.role !== Role.WAREHOUSE) {

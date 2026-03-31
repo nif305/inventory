@@ -11,11 +11,14 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'دور غير صالح' }, { status: 400 });
     }
 
-    const currentRolesCookie = request.cookies.get('user_roles')?.value || '[]';
-    let currentRoles: string[] = [];
+    const rolesCookie =
+      request.cookies.get('server_user_roles')?.value ||
+      request.cookies.get('user_roles')?.value ||
+      '[]';
 
+    let currentRoles: string[] = [];
     try {
-      currentRoles = JSON.parse(decodeURIComponent(currentRolesCookie));
+      currentRoles = JSON.parse(decodeURIComponent(rolesCookie));
     } catch {
       currentRoles = [];
     }
@@ -36,6 +39,7 @@ export async function POST(request: NextRequest) {
 
     response.cookies.set('active_role', requestedRole, cookieOptions);
     response.cookies.set('user_role', requestedRole, cookieOptions);
+    response.cookies.set('server_active_role', requestedRole, cookieOptions);
 
     return response;
   } catch {
