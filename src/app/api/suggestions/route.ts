@@ -28,264 +28,56 @@ async function resolveSessionUser(request: NextRequest) {
   const cookieEmployeeId = decodeURIComponent(
     request.cookies.get('user_employee_id')?.value || ''
   ).trim();
-  const cookieRole = decodeURIComponent(request.cookies.get('user_role')?.value || 'user').trim();
+  const activeRole = decodeURIComponent(
+    request.headers.get('x-active-role') ||
+    request.cookies.get('server_active_role')?.value ||
+    request.cookies.get('active_role')?.value ||
+    request.cookies.get('user_role')?.value ||
+    'user'
+  ).trim();
 
-  const role = mapRole(cookieRole);
+  const role = mapRole(activeRole);
 
   let user = null;
 
   if (cookieId) {
     user = await prisma.user.findUnique({
       where: { id: cookieId },
-      select: { id: true, role: true, fullName: true, department: true, email: true, employeeId: true },
+      select: { id: true, roles: true, fullName: true, department: true, email: true, employeeId: true, status: true },
     });
   }
 
   if (!user && cookieEmail) {
     user = await prisma.user.findFirst({
       where: { email: { equals: cookieEmail, mode: 'insensitive' } },
-      select: { id: true, role: true, fullName: true, department: true, email: true, employeeId: true },
+      select: { id: true, roles: true, fullName: true, department: true, email: true, employeeId: true, status: true },
     });
   }
 
   if (!user && cookieEmployeeId) {
     user = await prisma.user.findUnique({
       where: { employeeId: cookieEmployeeId },
-      select: { id: true, role: true, fullName: true, department: true, email: true, employeeId: true },
+      select: { id: true, roles: true, fullName: true, department: true, email: true, employeeId: true, status: true },
     });
   }
 
   if (!user) {
-    const safeEmployeeId = cookieEmployeeId || `EMP-${Date.now()}`;
-    const safeEmail = cookieEmail || `${safeEmployeeId.toLowerCase()}@agency.local`;
-
-    user = await prisma.user.upsert({
-      where: { employeeId: safeEmployeeId },
-      update: {
-        fullName: cookieName,
-        email: safeEmail,
-        department: cookieDepartment,
-        role,
-        status: Status.ACTIVE,
-      },
-      create: {
-        employeeId: safeEmployeeId,
-        fullName: cookieName,
-        email: safeEmail,
-        mobile: '0500000000',
-        department: cookieDepartment,
-        jobTitle: 'مستخدم',
-        passwordHash: 'local-auth',
-        role,
-        status: Status.ACTIVE,
-      },
-      select: { id: true, role: true, fullName: true, department: true, email: true, employeeId: true },
-    });
+    throw new Error('تعذر التحقق من المستخدم الحالي. أعد تسجيل الدخول ثم حاول مرة أخرى.');
   }
 
-  return user;
-}
-
-function normalizeCategory(value?: string) {
-  const raw = String(value || '').trim().toUpperCase();
-  if (raw === 'MAINTENANCE') return 'MAINTENANCE';
-  if (raw === 'CLEANING') return 'CLEANING';
-  if (raw === 'PURCHASE') return 'PURCHASE';
-  return 'OTHER';
-}
-
-function normalizePriority(value?: string): Priority {
-  const raw = String(value || '').trim().toUpperCase();
-  if (raw === 'LOW') return Priority.LOW;
-  if (raw === 'HIGH') return Priority.HIGH;
-  if (raw === 'URGENT') return Priority.URGENT;
-  return Priority.NORMAL;
-}
-
-function normalizeTargetDepartment(value?: string) {
-  const raw = String(value || '').trim().toUpperCase();
-  if (!raw) return 'SUPPORT_SERVICES';
-  return raw;
-}
-
-function formatArabicDate(value: Date) {
-  try {
-    return new Intl.DateTimeFormat('ar-SA', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(value);
-  } catch {
-    return value.toISOString().slice(0, 10);
-  }
-}
-
-function formatArabicTime(value: Date) {
-  try {
-    return new Intl.DateTimeFormat('ar-SA', {
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    }).format(value);
-  } catch {
-    return value.toISOString().slice(11, 16);
-  }
-}
-
-function parseJsonObject(value?: string | null) {
-  if (!value) return {} as Record<string, any>;
-  try {
-    return JSON.parse(value);
-  } catch {
-    return {} as Record<string, any>;
-  }
-}
-
-function resolveRecipients(category: string, requesterEmail?: string | null, externalRecipient?: string) {
-  const recipients: string[] = [];
-
-  if (category === 'MAINTENANCE' || category === 'CLEANING') {
-    recipients.push('ssd@nauss.edu.sa', 'AAlosaimi@nauss.edu.sa');
-  } else if (category === 'PURCHASE') {
-    recipients.push(
-      'finance@nauss.edu.sa',
-      'aalaraj@nauss.edu.sa',
-      'YAlqaoud@nauss.edu.sa',
-      'Procurement@nauss.edu.sa'
-    );
-  } else if (externalRecipient) {
-    externalRecipient
-      .split(',')
-      .map((item) => item.trim())
-      .filter(Boolean)
-      .forEach((item) => recipients.push(item));
+  if (user.status !== Status.ACTIVE) {
+    throw new Error('الحساب غير نشط.');
   }
 
-  if (requesterEmail) {
-    recipients.push(requesterEmail);
-  }
-
-  return Array.from(new Set(recipients.map((item) => item.trim()).filter(Boolean))).join(', ');
-}
-
-function buildFormalBody(params: {
-  category: string;
-  requestCode: string;
-  createdAt: Date;
-  title: string;
-  description: string;
-  requesterName: string;
-  requesterDepartment: string;
-  requesterEmail: string;
-  itemName: string;
-  quantity: number;
-  location: string;
-  justification: string;
-  adminNotes: string;
-}) {
-  const categoryLabel =
-    params.category === 'MAINTENANCE'
-      ? 'صيانة'
-      : params.category === 'CLEANING'
-      ? 'نظافة'
-      : params.category === 'PURCHASE'
-      ? 'شراء مباشر'
-      : 'طلب آخر';
-
-  return `سعادة الجهة المختصة سلّمها الله،
-
-السلام عليكم ورحمة الله وبركاته،
-
-نفيدكم بورود ${categoryLabel} عبر منصة مواد التدريب، ونأمل التكرم بالاطلاع واتخاذ ما يلزم حيال الطلب الموضح أدناه:
-
-رقم الطلب: ${params.requestCode}
-تاريخ الطلب: ${formatArabicDate(params.createdAt)}
-وقت الطلب: ${formatArabicTime(params.createdAt)}
-نوع الطلب: ${params.title}
-مقدم الطلب: ${params.requesterName}
-الإدارة: ${params.requesterDepartment}
-البريد الإلكتروني: ${params.requesterEmail || '—'}
-الموقع: ${params.location || '—'}
-العنصر/الجزء: ${params.itemName || '—'}
-الكمية: ${params.quantity || 1}
-التفاصيل: ${params.description || '—'}
-حيثيات الطلب: ${params.justification || '—'}
-ملاحظة المدير: ${params.adminNotes || '—'}
-
-نأمل التكرم بمعالجة الطلب حسب المتاح، ولكم خالص التقدير.
-
-إدارة عمليات التدريب
-وكالة التدريب`;
-}
-
-async function generateMaintenanceCode() {
-  const count = await prisma.maintenanceRequest.count();
-  return `MNT-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
-}
-
-async function generatePurchaseCode() {
-  const count = await prisma.purchaseRequest.count();
-  return `PUR-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
-}
-
-async function generateOtherCode() {
-  const count = await prisma.suggestion.count({ where: { category: 'OTHER' } });
-  return `OTH-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
-}
-
-async function notifyManagersAboutSuggestion(params: {
-  suggestionId: string;
-  category: string;
-  title: string;
-  requesterName: string;
-}) {
-  const managers = await prisma.user.findMany({
-    where: { role: Role.MANAGER, status: Status.ACTIVE },
-    select: { id: true },
-  });
-
-  if (!managers.length) return;
-
-  await prisma.notification.createMany({
-    data: managers.map((manager) => ({
-      userId: manager.id,
-      type: 'NEW_SERVICE_REQUEST',
-      title: 'طلب خدمي جديد بانتظار القرار',
-      message: `ورد ${params.title} من ${params.requesterName} ويحتاج مراجعة واعتمادًا.`,
-      link: '/dashboard',
-      entityId: params.suggestionId,
-      entityType: 'SUGGESTION',
-    })),
-  });
-}
-
-async function notifyRequesterAboutSuggestion(params: {
-  requesterId: string;
-  suggestionId: string;
-  category: string;
-  title: string;
-  action: 'APPROVED' | 'REJECTED';
-  reason?: string;
-}) {
-  const title =
-    params.action === 'APPROVED' ? 'تم اعتماد الطلب الخدمي' : 'تم رفض الطلب الخدمي';
-
-  const message =
-    params.action === 'APPROVED'
-      ? `تم اعتماد ${params.title} ويمكنك متابعة الإجراء من النظام.`
-      : `تم رفض ${params.title}${params.reason ? ` بسبب: ${params.reason}` : ''}.`;
-
-  await prisma.notification.create({
-    data: {
-      userId: params.requesterId,
-      type: params.action === 'APPROVED' ? 'SERVICE_REQUEST_APPROVED' : 'SERVICE_REQUEST_REJECTED',
-      title,
-      message,
-      link: '/notifications',
-      entityId: params.suggestionId,
-      entityType: 'SUGGESTION',
-    },
-  });
+  return {
+    id: user.id,
+    fullName: user.fullName || cookieName,
+    department: user.department || cookieDepartment,
+    email: user.email || cookieEmail,
+    employeeId: user.employeeId || cookieEmployeeId,
+    role,
+    roles: Array.isArray(user.roles) ? user.roles : [],
+  };
 }
 
 export async function GET(request: NextRequest) {

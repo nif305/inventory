@@ -20,67 +20,56 @@ async function resolveSessionUser(request: NextRequest) {
   const cookieEmployeeId = decodeURIComponent(
     request.cookies.get('user_employee_id')?.value || ''
   ).trim();
-  const cookieRole = decodeURIComponent(request.cookies.get('user_role')?.value || 'user').trim();
+  const activeRole = decodeURIComponent(
+    request.headers.get('x-active-role') ||
+    request.cookies.get('server_active_role')?.value ||
+    request.cookies.get('active_role')?.value ||
+    request.cookies.get('user_role')?.value ||
+    'user'
+  ).trim();
 
-  const role = mapRole(cookieRole);
+  const role = mapRole(activeRole);
 
   let user = null;
 
   if (cookieId) {
     user = await prisma.user.findUnique({
       where: { id: cookieId },
-      select: { id: true, role: true, fullName: true, department: true, email: true, employeeId: true },
+      select: { id: true, roles: true, fullName: true, department: true, email: true, employeeId: true, status: true },
     });
   }
 
   if (!user && cookieEmail) {
     user = await prisma.user.findFirst({
       where: { email: { equals: cookieEmail, mode: 'insensitive' } },
-      select: { id: true, role: true, fullName: true, department: true, email: true, employeeId: true },
+      select: { id: true, roles: true, fullName: true, department: true, email: true, employeeId: true, status: true },
     });
   }
 
   if (!user && cookieEmployeeId) {
     user = await prisma.user.findUnique({
       where: { employeeId: cookieEmployeeId },
-      select: { id: true, role: true, fullName: true, department: true, email: true, employeeId: true },
+      select: { id: true, roles: true, fullName: true, department: true, email: true, employeeId: true, status: true },
     });
   }
 
   if (!user) {
-    const safeEmployeeId = cookieEmployeeId || `EMP-${Date.now()}`;
-    const safeEmail = cookieEmail || `${safeEmployeeId.toLowerCase()}@agency.local`;
-
-    user = await prisma.user.upsert({
-      where: { employeeId: safeEmployeeId },
-      update: {
-        fullName: cookieName,
-        email: safeEmail,
-        department: cookieDepartment,
-        role,
-        status: Status.ACTIVE,
-      },
-      create: {
-        employeeId: safeEmployeeId,
-        fullName: cookieName,
-        email: safeEmail,
-        mobile: '0500000000',
-        department: cookieDepartment,
-        jobTitle: 'مستخدم',
-        passwordHash: 'local-auth',
-        role,
-        status: Status.ACTIVE,
-      },
-      select: { id: true, role: true, fullName: true, department: true, email: true, employeeId: true },
-    });
+    throw new Error('تعذر التحقق من المستخدم الحالي. أعد تسجيل الدخول ثم حاول مرة أخرى.');
   }
 
-  return user;
-}
+  if (user.status !== Status.ACTIVE) {
+    throw new Error('الحساب غير نشط.');
+  }
 
-async function generatePurchaseCode() {
-  const count = await prisma.purchaseRequest.count();
-  return `PUR-${new Date().getFullYear()}-${String(count + 1).padStart(4, '0')}`;
+  return {
+    id: user.id,
+    fullName: user.fullName || cookieName,
+    department: user.department || cookieDepartment,
+    email: user.email || cookieEmail,
+    employeeId: user.employeeId || cookieEmployeeId,
+    role,
+    roles: Array.isArray(user.roles) ? user.roles : [],
+  };
 }
 
 export async function GET(request: NextRequest) {
