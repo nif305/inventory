@@ -1,151 +1,115 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { NOTIFICATIONS_UPDATED_EVENT } from '@/lib/notifications';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
-type ServerNotification = {
+type AlertItem = {
   id: string;
   title: string;
   message: string;
-  link?: string | null;
-  entityId?: string | null;
-  entityType?: string | null;
-  isRead: boolean;
-  createdAt: string;
-  type?: string | null;
+  createdAt?: string;
 };
 
-function normalizeNotification(item: ServerNotification) {
-  const type = String(item.type || '').toUpperCase();
-  const entityType = String(item.entityType || '').toLowerCase();
+type ApiResponse = {
+  alerts?: AlertItem[];
+};
 
-  const severity =
-    type.includes('CRITICAL') || type.includes('OUT_OF_STOCK')
-      ? 'critical'
-      : type.includes('LOW_STOCK') || type.includes('NEW_') || type.includes('PENDING')
-      ? 'action'
-      : 'info';
+type CriticalAlertCenterProps = {
+  userId: string;
+};
 
-  const kind =
-    severity === 'critical' || severity === 'action' || entityType === 'message' ? 'alert' : 'notification';
+const AUTO_HIDE_MS = 5000;
 
-  return { ...item, severity, kind };
-}
-
-function isUrgentCenterItem(item: ReturnType<typeof normalizeNotification>) {
-  const entityType = String(item.entityType || '').toLowerCase();
-  return item.severity === 'critical' || item.kind === 'alert' || entityType === 'message';
-}
-
-function resolveItemLink(item: ReturnType<typeof normalizeNotification>): string | null {
-  const entityType = (item.entityType || '').toLowerCase();
-
-  if (item.link && item.link !== '/notifications') return item.link;
-  if (entityType === 'message' && item.entityId) return `/messages?open=${item.entityId}`;
-  if (entityType === 'request' && item.entityId) return `/requests?open=${item.entityId}`;
-  if (entityType === 'return' && item.entityId) return `/returns?open=${item.entityId}`;
-  if (entityType === 'custody' && item.entityId) return `/custody?open=${item.entityId}`;
-  if (entityType === 'inventory' && item.entityId) return `/inventory?open=${item.entityId}`;
-  if (entityType === 'suggestion' && item.entityId) return '/dashboard';
-  return '/notifications';
-}
-
-function getUrgentLabel(item: ReturnType<typeof normalizeNotification>) {
-  const entityType = String(item.entityType || '').toLowerCase();
-  if (entityType === 'message') return 'رسالة داخلية مهمة';
-  if (item.severity === 'critical') return 'تنبيه مهم وعاجل';
-  return 'تنبيه يحتاج انتباهًا مباشرًا';
-}
-
-function getUrgentNote(item: ReturnType<typeof normalizeNotification>) {
-  const entityType = String(item.entityType || '').toLowerCase();
-  if (entityType === 'message') {
-    return 'هذه الرسالة الداخلية عُدّت ذات أولوية عالية، لذلك تظهر مباشرة عند فتح النظام حتى لا تفوتك.';
-  }
-  return 'سيبقى هذا التنبيه ظاهرًا حتى تطّلع عليه أو تفتح العنصر المرتبط به.';
-}
-
-export function CriticalAlertCenter({ userId }: { userId: string }) {
-  const router = useRouter();
-  const [items, setItems] = useState<ReturnType<typeof normalizeNotification>[]>([]);
-  const active = useMemo(() => items.find((item) => !item.isRead && isUrgentCenterItem(item)) || null, [items]);
+export function CriticalAlertCenter({ userId }: CriticalAlertCenterProps) {
+  const [alerts, setAlerts] = useState<AlertItem[]>([]);
+  const dismissedIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    let mounted = true;
+    if (!userId) return;
 
-    const refresh = async () => {
-      const response = await fetch('/api/notifications', {
-        cache: 'no-store',
-        credentials: 'include',
-      }).catch(() => null);
-      const json = response ? await response.json().catch(() => null) : null;
-      if (!mounted) return;
-      const rows = Array.isArray(json?.data) ? json.data.map(normalizeNotification) : [];
-      setItems(rows);
+    let isMounted = true;
+
+    const loadAlerts = async () => {
+      try {
+        const response = await fetch(`/api/notifications?critical=1&userId=${encodeURIComponent(userId)}`, {
+          cache: 'no-store',
+          credentials: 'include',
+        });
+
+        if (!response.ok) return;
+
+        const json: ApiResponse = await response.json().catch(() => ({ alerts: [] }));
+        const incoming = Array.isArray(json?.alerts) ? json.alerts : [];
+
+        const filtered = incoming.filter((item) => !dismissedIdsRef.current.has(item.id));
+
+        if (isMounted) {
+          setAlerts(filtered.slice(0, 4));
+        }
+      } catch {
+        if (isMounted) {
+          setAlerts([]);
+        }
+      }
     };
 
-    refresh();
-
-    window.addEventListener(NOTIFICATIONS_UPDATED_EVENT, refresh);
-    window.addEventListener('storage', refresh);
-    window.addEventListener('focus', refresh);
+    loadAlerts();
+    const interval = window.setInterval(loadAlerts, 15000);
 
     return () => {
-      mounted = false;
-      window.removeEventListener(NOTIFICATIONS_UPDATED_EVENT, refresh);
-      window.removeEventListener('storage', refresh);
-      window.removeEventListener('focus', refresh);
+      isMounted = false;
+      window.clearInterval(interval);
     };
   }, [userId]);
 
-  const markRead = async (id: string) => {
-    await fetch('/api/notifications', {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      credentials: 'include',
-      body: JSON.stringify({ id }),
-    }).catch(() => null);
-    setItems((prev) => prev.map((item) => (item.id === id ? { ...item, isRead: true } : item)));
+  useEffect(() => {
+    if (alerts.length === 0) return;
+
+    const timers = alerts.map((alert) =>
+      window.setTimeout(() => {
+        dismissedIdsRef.current.add(alert.id);
+        setAlerts((current) => current.filter((item) => item.id !== alert.id));
+      }, AUTO_HIDE_MS)
+    );
+
+    return () => {
+      timers.forEach((timer) => window.clearTimeout(timer));
+    };
+  }, [alerts]);
+
+  const visibleAlerts = useMemo(() => alerts.slice(0, 4), [alerts]);
+
+  const dismissAlert = (id: string) => {
+    dismissedIdsRef.current.add(id);
+    setAlerts((current) => current.filter((item) => item.id !== id));
   };
 
-  if (!active) return null;
+  if (visibleAlerts.length === 0) return null;
 
   return (
-    <div className="fixed inset-x-3 top-4 z-[95] mx-auto w-full max-w-4xl sm:inset-x-6">
-      <div className="rounded-[26px] border border-[#7c1e3e]/15 bg-white/95 p-4 shadow-[0_24px_80px_rgba(124,30,62,0.22)] backdrop-blur sm:p-5">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0 flex-1">
-            <div className="inline-flex items-center gap-2 rounded-full bg-[#7c1e3e]/10 px-3 py-1 text-[11px] font-semibold text-[#7c1e3e]">
-              <span className="h-2 w-2 rounded-full bg-[#7c1e3e]" />
-              {getUrgentLabel(active)}
+    <div className="pointer-events-none fixed left-4 top-4 z-[120] flex w-[min(380px,calc(100vw-2rem))] flex-col gap-3">
+      {visibleAlerts.map((alert) => (
+        <div
+          key={alert.id}
+          className="pointer-events-auto rounded-[22px] border border-slate-200 bg-white p-4 shadow-[0_18px_50px_-20px_rgba(15,23,42,0.35)]"
+        >
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1 text-right">
+              <p className="text-[18px] font-bold text-[#016564]">{alert.title}</p>
+              <p className="mt-1 text-[13px] leading-6 text-slate-600">{alert.message}</p>
             </div>
-            <div className="mt-3 text-[18px] font-extrabold text-slate-900 sm:text-[20px]">{active.title}</div>
-            <div className="mt-2 text-[13px] leading-7 text-slate-600 sm:text-[14px]">{active.message}</div>
-            <div className="mt-3 text-[12px] leading-6 text-slate-500">{getUrgentNote(active)}</div>
-          </div>
 
-          <div className="flex flex-col gap-2 sm:w-auto sm:min-w-[190px]">
             <button
               type="button"
-              onClick={async () => {
-                await markRead(active.id);
-                router.push(resolveItemLink(active) || '/notifications');
-              }}
-              className="rounded-2xl bg-[#016564] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#015150]"
+              onClick={() => dismissAlert(alert.id)}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-slate-200 text-slate-500 transition hover:bg-slate-50 hover:text-slate-700"
+              aria-label="إغلاق التنبيه"
+              title="إغلاق"
             >
-              فتح الآن
-            </button>
-            <button
-              type="button"
-              onClick={() => markRead(active.id)}
-              className="rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-600 transition hover:border-slate-300 hover:bg-slate-50"
-            >
-              تعليم كمقروء
+              ×
             </button>
           </div>
         </div>
-      </div>
+      ))}
     </div>
   );
 }
