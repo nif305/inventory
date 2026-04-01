@@ -1,23 +1,98 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { Role } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 
-export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+function mapRole(role: string): Role {
+  const normalized = String(role || '').trim().toLowerCase();
+  if (normalized === 'manager') return Role.MANAGER;
+  if (normalized === 'warehouse') return Role.WAREHOUSE;
+  return Role.USER;
+}
+
+async function resolveSessionUser(request: NextRequest) {
+  const cookieId = decodeURIComponent(request.cookies.get('user_id')?.value || '').trim();
+  const cookieEmail = decodeURIComponent(request.cookies.get('user_email')?.value || '').trim();
+  const cookieEmployeeId = decodeURIComponent(request.cookies.get('user_employee_id')?.value || '').trim();
+  const cookieRole = decodeURIComponent(request.cookies.get('user_role')?.value || 'user').trim();
+
+  const activeRole = mapRole(cookieRole);
+
+  let user: {
+    id: string;
+    roles: Role[];
+    fullName: string;
+    department: string;
+    email: string;
+    employeeId: string;
+  } | null = null;
+
+  if (cookieId) {
+    user = await prisma.user.findUnique({
+      where: { id: cookieId },
+      select: { id: true, roles: true, fullName: true, department: true, email: true, employeeId: true },
+    });
+  }
+
+  if (!user && cookieEmail) {
+    user = await prisma.user.findFirst({
+      where: { email: { equals: cookieEmail, mode: 'insensitive' } },
+      select: { id: true, roles: true, fullName: true, department: true, email: true, employeeId: true },
+    });
+  }
+
+  if (!user && cookieEmployeeId) {
+    user = await prisma.user.findUnique({
+      where: { employeeId: cookieEmployeeId },
+      select: { id: true, roles: true, fullName: true, department: true, email: true, employeeId: true },
+    });
+  }
+
+  if (!user) {
+    throw new Error('تعذر التحقق من المستخدم الحالي');
+  }
+
+  if (!Array.isArray(user.roles) || !user.roles.includes(activeRole)) {
+    throw new Error('الدور النشط غير صالح لهذا المستخدم');
+  }
+
+  return {
+    ...user,
+    activeRole,
+  };
+}
+
+export async function GET(request: NextRequest) {
   try {
-    const { id } = await params;
-    const draft = await prisma.emailDraft.findUnique({ where: { id } });
-    if (!draft) return NextResponse.json({ error: 'المسودة غير موجودة' }, { status: 404 });
+    const sessionUser = await resolveSessionUser(request);
 
-    const content = `To: ${draft.recipient}
-Subject: ${draft.subject}
+    if (sessionUser.activeRole !== Role.MANAGER) {
+      return NextResponse.json({ error: 'غير مصرح' }, { status: 403 });
+    }
 
-${draft.body}`;
-    return new NextResponse(content, {
-      headers: {
-        'Content-Type': 'text/plain; charset=utf-8',
-        'Content-Disposition': `attachment; filename="email-draft-${id}.txt"`,
+    const drafts = await prisma.emailDraft.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
+
+    return NextResponse.json({
+      data: drafts.map((draft) => ({
+        id: draft.id,
+        subject: draft.subject,
+        to: draft.recipient,
+        cc: null,
+        body: draft.body,
+        status: draft.status === 'COPIED' ? 'READY' : draft.status,
+        createdAt: draft.createdAt,
+        updatedAt: draft.copiedAt || draft.createdAt,
+        createdBy: null,
+      })),
+      stats: {
+        total: drafts.length,
       },
     });
   } catch (error: any) {
-    return NextResponse.json({ error: error?.message || 'تعذر تنزيل المسودة' }, { status: 500 });
+    return NextResponse.json(
+      { error: error?.message || 'تعذر جلب مسودات البريد' },
+      { status: error?.message?.includes('المستخدم') || error?.message?.includes('الدور') ? 401 : 500 }
+    );
   }
 }

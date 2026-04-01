@@ -1,37 +1,35 @@
 require('dotenv').config();
-const { PrismaClient } = require('@prisma/client');
+const { PrismaClient, Role, Status } = require('@prisma/client');
 
 const prisma = new PrismaClient();
 
-const legacyUsers = [
+const coreUsers = [
   {
-    employeeId: '1005',
-    fullName: 'عمير',
-    email: 'omair@nauss.edu.sa',
-    mobile: '0590600061',
+    employeeId: '239',
+    fullName: 'نايف الشهراني',
+    email: 'nalshahrani@nauss.edu.sa',
+    mobile: '0568122221',
     department: 'وكالة التدريب',
-    jobTitle: 'موظف',
-    passwordHash: 'admin123',
-    role: 'USER',
-    status: 'ACTIVE',
-    acceptedAt: '2026-03-18T02:53:20.629Z',
+    jobTitle: 'مدير إدارة عمليات التدريب',
+    passwordHash: 'local-auth',
+    roles: [Role.USER, Role.MANAGER, Role.WAREHOUSE],
+    status: Status.ACTIVE,
   },
   {
-    employeeId: 'NAUSS-003',
-    fullName: 'مستخدم تجريبي',
-    email: 'user1@nauss.edu.sa',
-    mobile: '0500000001',
-    department: 'إدارة عمليات التدريب',
-    jobTitle: 'موظف',
-    passwordHash: 'admin123',
-    role: 'USER',
-    status: 'ACTIVE',
-    acceptedAt: '2026-03-18T00:07:39.091Z',
+    employeeId: '1002',
+    fullName: 'نواف المحارب',
+    email: 'wa.n1@nauss.edu.sa',
+    mobile: '0500000002',
+    department: 'المستودع',
+    jobTitle: 'مسؤول مخزن',
+    passwordHash: 'local-auth',
+    roles: [Role.USER, Role.WAREHOUSE],
+    status: Status.ACTIVE,
   },
 ];
 
 async function main() {
-  for (const user of legacyUsers) {
+  for (const user of coreUsers) {
     const saved = await prisma.user.upsert({
       where: { email: user.email.toLowerCase() },
       update: {
@@ -41,7 +39,7 @@ async function main() {
         department: user.department,
         jobTitle: user.jobTitle,
         passwordHash: user.passwordHash,
-        role: user.role,
+        roles: user.roles,
         status: user.status,
       },
       create: {
@@ -52,7 +50,7 @@ async function main() {
         department: user.department,
         jobTitle: user.jobTitle,
         passwordHash: user.passwordHash,
-        role: user.role,
+        roles: user.roles,
         status: user.status,
       },
     });
@@ -61,19 +59,19 @@ async function main() {
       where: { userId: saved.id },
       update: {
         accepted: true,
-        acceptedAt: new Date(user.acceptedAt),
+        acceptedAt: new Date(),
         version: '1.0',
       },
       create: {
         userId: saved.id,
         accepted: true,
-        acceptedAt: new Date(user.acceptedAt),
+        acceptedAt: new Date(),
         version: '1.0',
       },
     });
   }
 
-  console.log('✅ legacy users migrated');
+  console.log('✅ core users seeded safely');
 }
 
 main()
