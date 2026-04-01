@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Role, Status, SuggestionCategory, SuggestionPriority, SuggestionStatus } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 
-import { prisma } from '@/lib/prisma';
 
 function mapRole(role: string): Role {
   const normalized = String(role || '').trim().toLowerCase();
