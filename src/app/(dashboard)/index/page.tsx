@@ -172,13 +172,11 @@ function StatCard({
   value,
   note,
   tone = 'default',
-  href,
 }: {
   title: string;
   value: number;
   note: string;
   tone?: 'default' | 'primary' | 'gold' | 'danger' | 'success';
-  href?: string;
 }) {
   const tones: Record<string, string> = {
     default: 'bg-white text-slate-900',
@@ -188,15 +186,18 @@ function StatCard({
     success: 'bg-[#f2fbf7] text-[#21795c]',
   };
 
-  const content = (
-    <SurfaceCard className={`p-4 transition hover:-translate-y-0.5 hover:shadow-md ${tones[tone]}`}>
+  return (
+    <SurfaceCard className={`p-4 ${tones[tone]}`}>
       <div className="text-[12px] font-medium text-slate-500">{title}</div>
       <div className="mt-2 text-[26px] font-bold leading-none">{formatNumber(value)}</div>
       <div className="mt-2 text-[11px] leading-5 text-slate-500">{note}</div>
     </SurfaceCard>
   );
+}
 
-  return href ? <Link href={href}>{content}</Link> : content;
+
+function ClickableStatCard({ href, ...props }: { href: string; title: string; value: number; note: string; tone?: 'default' | 'primary' | 'gold' | 'danger' | 'success'; }) {
+  return <Link href={href} className="block transition hover:-translate-y-0.5"><StatCard {...props} /></Link>;
 }
 
 function InventoryDonut({
@@ -342,24 +343,22 @@ function ManagerDashboard(props: any) {
   const { metrics, inventoryStatusData, requestFlowData, servicesData, latestUpdates, loading } = props;
   const actions = [
     { title: 'طلبات صرف بانتظار التنفيذ', count: metrics.pendingRequests, hint: 'طلبات مواد تحتاج تدخلًا مباشرًا', href: '/requests', critical: metrics.pendingRequests > 0 },
-    { title: 'إرجاعات بانتظار الاستلام', count: metrics.pendingReturns, hint: 'مواد عائدة لم تُستلم بعد', href: '/returns', critical: metrics.pendingReturns > 0 },
-    { title: 'طلبات صيانة معلقة', count: metrics.openMaintenance, hint: 'تحتاج توجيهًا أو متابعة', href: '/suggestions?category=MAINTENANCE', critical: metrics.openMaintenance > 0 },
-    { title: 'طلبات نظافة معلقة', count: metrics.cleaningRequests, hint: 'تحتاج توجيهًا أو متابعة', href: '/suggestions?category=CLEANING', critical: metrics.cleaningRequests > 0 },
-    { title: 'طلبات شراء مباشر', count: metrics.openPurchases, hint: 'طلبات تحتاج متابعة', href: '/suggestions?category=PURCHASE', critical: metrics.openPurchases > 0 },
-    { title: 'طلبات أخرى', count: metrics.otherRequests, hint: 'طلبات عامة بحاجة إلى قرار', href: '/suggestions?category=OTHER', critical: metrics.otherRequests > 0 },
-    { title: 'عهد متأخرة', count: metrics.delayedCustody, hint: 'مواد تجاوزت تاريخ الإرجاع', href: '/custody', critical: metrics.delayedCustody > 0 },
+    { title: 'طلبات صيانة بانتظار الاعتماد', count: metrics.maintenancePending, hint: 'طلبات خدمية تحتاج قرار المدير', href: '/suggestions?type=MAINTENANCE', critical: metrics.maintenancePending > 0 },
+    { title: 'طلبات نظافة بانتظار الاعتماد', count: metrics.cleaningPending, hint: 'طلبات نظافة تحتاج قرار المدير', href: '/suggestions?type=CLEANING', critical: metrics.cleaningPending > 0 },
+    { title: 'طلبات شراء مباشر بانتظار الاعتماد', count: metrics.purchasePending, hint: 'طلبات شراء تحتاج قرار المدير', href: '/suggestions?type=PURCHASE', critical: metrics.purchasePending > 0 },
+    { title: 'طلبات أخرى بانتظار الاعتماد', count: metrics.otherPending, hint: 'طلبات أخرى تحتاج قرار المدير', href: '/suggestions?type=OTHER', critical: metrics.otherPending > 0 },
     { title: 'مواد منخفضة أو نافدة', count: metrics.lowStock + metrics.outOfStock, hint: 'تحتاج قرارًا على المخزون أو التوريد', href: '/inventory', critical: metrics.outOfStock > 0 },
   ];
 
   const links = [
-    { href: '/inventory', label: 'فتح المخزون' },
+    { href: '/inventory?status=LOW_STOCK', label: 'المواد المنخفضة' },
+    { href: '/inventory?status=OUT_OF_STOCK', label: 'المواد النافدة' },
     { href: '/requests', label: 'فتح الطلبات' },
-    { href: '/returns', label: 'فتح الإرجاعات' },
-    { href: '/suggestions?category=MAINTENANCE', label: 'طلبات الصيانة' },
-    { href: '/suggestions?category=CLEANING', label: 'طلبات النظافة' },
-    { href: '/suggestions?category=PURCHASE', label: 'طلبات الشراء' },
-    { href: '/suggestions?category=OTHER', label: 'الطلبات الأخرى' },
-    { href: '/notifications', label: 'الإشعارات' },
+    { href: '/suggestions?type=MAINTENANCE', label: 'طلبات الصيانة' },
+    { href: '/suggestions?type=CLEANING', label: 'طلبات النظافة' },
+    { href: '/suggestions?type=PURCHASE', label: 'طلبات الشراء المباشر' },
+    { href: '/suggestions?type=OTHER', label: 'الطلبات الأخرى' },
+    { href: '/email-drafts', label: 'المراسلات الخارجية' },
   ];
 
   return (
@@ -375,22 +374,18 @@ function ManagerDashboard(props: any) {
           </SurfaceCard>
 
           <div className="grid gap-3 sm:grid-cols-3">
-            <StatCard title="إجمالي الأصناف" value={metrics.totalInventory} note="عدد المواد المعرفة في النظام" tone="primary" href="/inventory" />
-            <StatCard title="طلبات بانتظار الإجراء" value={metrics.pendingRequests + metrics.pendingReturns} note="صرف أو استلام" tone="danger" href="/requests" />
-            <StatCard title="تنبيهات غير مقروءة" value={metrics.unreadNotifications} note="آخر ما وصلك داخل النظام" tone="gold" href="/notifications" />
-            <StatCard title="مواد منخفضة" value={metrics.lowStock} note="تحتاج متابعة قريبة" tone="gold" href="/inventory?status=LOW_STOCK" />
-            <StatCard title="مواد نافدة" value={metrics.outOfStock} note="تؤثر على الجاهزية" tone="danger" href="/inventory?status=OUT_OF_STOCK" />
-            <StatCard title="عهد متأخرة" value={metrics.delayedCustody} note="مواد تجاوزت الموعد المحدد" tone="default" href="/custody" />
+            <ClickableStatCard href="/inventory" title="إجمالي الأصناف" value={metrics.totalInventory} note="عدد المواد المعرفة في النظام" tone="primary" />
+            <ClickableStatCard href="/requests" title="طلبات بانتظار الإجراء" value={metrics.pendingRequests + metrics.pendingReturns} note="صرف أو استلام" tone="danger" />
+            <ClickableStatCard href="/notifications" title="تنبيهات غير مقروءة" value={metrics.unreadNotifications} note="آخر ما وصلك داخل النظام" tone="gold" />
+            <ClickableStatCard href="/inventory?status=LOW_STOCK" title="مواد منخفضة" value={metrics.lowStock} note="تحتاج متابعة قريبة" tone="gold" />
+            <ClickableStatCard href="/inventory?status=OUT_OF_STOCK" title="مواد نافدة" value={metrics.outOfStock} note="تؤثر على الجاهزية" tone="danger" />
+            <ClickableStatCard href="/custody?filter=late" title="عهد متأخرة" value={metrics.delayedCustody} note="مواد تجاوزت الموعد المحدد" tone="default" />
+            <ClickableStatCard href="/suggestions?type=MAINTENANCE" title="طلبات صيانة" value={metrics.maintenancePending} note="بانتظار اعتماد المدير" tone="danger" />
+            <ClickableStatCard href="/suggestions?type=CLEANING" title="طلبات نظافة" value={metrics.cleaningPending} note="بانتظار اعتماد المدير" tone="primary" />
+            <ClickableStatCard href="/suggestions?type=PURCHASE" title="طلبات شراء مباشر" value={metrics.purchasePending} note="بانتظار اعتماد المدير" tone="gold" />
           </div>
         </div>
       </Hero>
-
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard title="طلبات الصيانة" value={metrics.openMaintenance} note="طلبات خدمات مساندة" tone="default" href="/suggestions?category=MAINTENANCE" />
-        <StatCard title="طلبات النظافة" value={metrics.cleaningRequests} note="طلبات نظافة مفتوحة" tone="default" href="/suggestions?category=CLEANING" />
-        <StatCard title="طلبات الشراء" value={metrics.openPurchases} note="طلبات شراء مباشر" tone="default" href="/suggestions?category=PURCHASE" />
-        <StatCard title="الطلبات الأخرى" value={metrics.otherRequests} note="طلبات تشغيلية أخرى" tone="default" href="/suggestions?category=OTHER" />
-      </div>
 
       <div className="grid gap-5 xl:grid-cols-[1.05fr_0.95fr]">
         <SectionCard title="أهم العناصر التي تستدعي تدخلًا مباشرًا" subtitle="عناصر تنفيذية مرتبطة بقرار المدير">
@@ -404,8 +399,8 @@ function ManagerDashboard(props: any) {
             {links.map((link) => <QuickAction key={link.href} href={link.href} label={link.label} />)}
           </div>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <StatCard title="بنود الطلبات" value={metrics.requestItemsCount} note="إجمالي البنود المسجلة" tone="primary" href="/requests" />
-            <StatCard title="الخدمات المفتوحة" value={metrics.openMaintenance + metrics.openPurchases + metrics.cleaningRequests + metrics.otherRequests} note="صيانة وشراء ونظافة وطلبات أخرى" tone="default" href="/suggestions" />
+            <ClickableStatCard href="/suggestions" title="الخدمات المفتوحة" value={metrics.maintenancePending + metrics.cleaningPending + metrics.purchasePending + metrics.otherPending} note="صيانة وشراء ونظافة وطلبات أخرى" tone="default" />
+            <StatCard title="بنود الطلبات" value={metrics.requestItemsCount} note="إجمالي البنود المسجلة" tone="primary" />
           </div>
         </SectionCard>
       </div>

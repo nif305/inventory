@@ -1,18 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import {
-  MaintenanceStatus,
-  Priority,
-  PurchaseStatus,
-  Role,
-  Status,
-  SuggestionStatus,
-} from '@prisma/client';
+import { Priority, PurchaseStatus, Role, Status, SuggestionStatus, MaintenanceStatus } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 
-const SUPPORT_EMAIL = 'test@nauss.edu.sa';
-const PURCHASE_HANDLER_EMAIL = 'wa.n1@nauss.edu.sa';
+const SUPPORT_RECIPIENTS = 'ssd@nauss.edu.sa,AAlosaimi@nauss.edu.sa';
+const PURCHASE_RECIPIENT = 'wa.n1@nauss.edu.sa';
 
 type SuggestionCategory = 'MAINTENANCE' | 'CLEANING' | 'PURCHASE' | 'OTHER';
+
+type JsonObject = Record<string, any>;
 
 function mapRole(role: string): Role {
   const normalized = String(role || '').trim().toLowerCase();
@@ -39,17 +34,16 @@ function normalizePriority(value: any): Priority {
 
 function normalizeTargetDepartment(value: any) {
   const normalized = String(value || '').trim().toUpperCase();
-  if (['SUPPORT_SERVICES', 'PURCHASES', 'PROCUREMENT', 'FINANCE', 'OTHER'].includes(normalized)) {
-    return normalized;
-  }
-  return 'OTHER';
+  if (!normalized) return null;
+  return normalized;
 }
 
-function parseJsonObject(value?: string | null) {
+function parseJsonObject(value: any): JsonObject {
   if (!value) return {};
+  if (typeof value === 'object' && !Array.isArray(value)) return value;
   try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' ? parsed : {};
+    const parsed = JSON.parse(String(value));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   } catch {
     return {};
   }
@@ -59,7 +53,7 @@ async function resolveSessionUser(request: NextRequest) {
   const cookieId = decodeURIComponent(request.cookies.get('user_id')?.value || '').trim();
   const cookieEmail = decodeURIComponent(request.cookies.get('user_email')?.value || '').trim();
   const cookieEmployeeId = decodeURIComponent(request.cookies.get('user_employee_id')?.value || '').trim();
-  const activeRoleValue = decodeURIComponent(
+  const activeRoleRaw = decodeURIComponent(
     request.headers.get('x-active-role') ||
       request.cookies.get('server_active_role')?.value ||
       request.cookies.get('active_role')?.value ||
@@ -67,7 +61,7 @@ async function resolveSessionUser(request: NextRequest) {
       'user'
   ).trim();
 
-  const activeRole = mapRole(activeRoleValue);
+  const activeRole = mapRole(activeRoleRaw);
 
   let user = null;
   if (cookieId) {
@@ -76,14 +70,12 @@ async function resolveSessionUser(request: NextRequest) {
       select: { id: true, roles: true, fullName: true, department: true, email: true, employeeId: true, status: true },
     });
   }
-
   if (!user && cookieEmail) {
     user = await prisma.user.findFirst({
       where: { email: { equals: cookieEmail, mode: 'insensitive' } },
       select: { id: true, roles: true, fullName: true, department: true, email: true, employeeId: true, status: true },
     });
   }
-
   if (!user && cookieEmployeeId) {
     user = await prisma.user.findUnique({
       where: { employeeId: cookieEmployeeId },
@@ -93,235 +85,184 @@ async function resolveSessionUser(request: NextRequest) {
 
   if (!user) throw new Error('تعذر التحقق من المستخدم الحالي. أعد تسجيل الدخول ثم حاول مرة أخرى.');
   if (user.status !== Status.ACTIVE) throw new Error('الحساب غير نشط.');
-  if (!Array.isArray(user.roles) || !user.roles.includes(activeRole)) throw new Error('الدور النشط غير صالح لهذا المستخدم.');
-
-  return { ...user, activeRole };
-}
-
-function getSuggestionPrefix(category: SuggestionCategory) {
-  if (category === 'MAINTENANCE') return 'MNT';
-  if (category === 'CLEANING') return 'CLN';
-  if (category === 'PURCHASE') return 'PRC';
-  return 'OTH';
-}
-
-async function buildSuggestionCodeMap() {
-  const rows = await prisma.suggestion.findMany({
-    select: { id: true, category: true, createdAt: true, adminNotes: true },
-    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-  });
-
-  const counters = new Map<string, number>();
-  const codeMap = new Map<string, string>();
-
-  for (const row of rows) {
-    const category = normalizeCategory(row.category);
-    const linkedCode = parseJsonObject(row.adminNotes).linkedCode;
-    if (linkedCode) {
-      codeMap.set(row.id, String(linkedCode));
-      continue;
-    }
-
-    const year = new Date(row.createdAt).getFullYear();
-    const key = `${category}-${year}`;
-    const next = (counters.get(key) || 0) + 1;
-    counters.set(key, next);
-    codeMap.set(row.id, `${getSuggestionPrefix(category)}-${year}-${String(next).padStart(4, '0')}`);
+  if (!Array.isArray(user.roles) || !user.roles.includes(activeRole)) {
+    throw new Error('الدور النشط غير صالح لهذا المستخدم.');
   }
 
-  return codeMap;
+  return { ...user, role: activeRole };
 }
 
-async function generateMaintenanceCode(category: SuggestionCategory) {
-  const prefix = category === 'CLEANING' ? 'CLN' : 'MNT';
+function categoryMeta(category: SuggestionCategory) {
+  switch (category) {
+    case 'MAINTENANCE':
+      return { prefix: 'MNT', label: 'طلب صيانة', notification: 'طلب صيانة' };
+    case 'CLEANING':
+      return { prefix: 'CLN', label: 'طلب نظافة', notification: 'طلب نظافة' };
+    case 'PURCHASE':
+      return { prefix: 'PRC', label: 'طلب شراء مباشر', notification: 'طلب شراء مباشر' };
+    default:
+      return { prefix: 'OTH', label: 'طلب آخر', notification: 'طلب آخر' };
+  }
+}
+
+async function generatePublicCode(category: SuggestionCategory) {
   const year = new Date().getFullYear();
-  const rows = await prisma.maintenanceRequest.findMany({
-    where: { code: { startsWith: `${prefix}-${year}-` } },
-    select: { code: true },
-    orderBy: { createdAt: 'asc' },
+  const prefix = categoryMeta(category).prefix;
+  const existing = await prisma.suggestion.findMany({
+    where: { category },
+    select: { justification: true },
   });
-  return `${prefix}-${year}-${String(rows.length + 1).padStart(4, '0')}`;
+  let maxSerial = 0;
+  for (const row of existing) {
+    const parsed = parseJsonObject(row.justification);
+    const code = String(parsed.publicCode || '');
+    const match = code.match(/-(\d{4})$/);
+    if (match) maxSerial = Math.max(maxSerial, Number(match[1]));
+  }
+  return `${prefix}-${year}-${String(maxSerial + 1).padStart(4, '0')}`;
 }
 
-async function generatePurchaseCode() {
-  const prefix = 'PRC';
-  const year = new Date().getFullYear();
-  const rows = await prisma.purchaseRequest.findMany({
-    where: { code: { startsWith: `${prefix}-${year}-` } },
-    select: { code: true },
-    orderBy: { createdAt: 'asc' },
-  });
-  return `${prefix}-${year}-${String(rows.length + 1).padStart(4, '0')}`;
+async function generateLinkedCode(category: SuggestionCategory) {
+  return generatePublicCode(category);
 }
 
-async function generateOtherCode() {
-  const prefix = 'OTH';
-  const year = new Date().getFullYear();
-  const rows = await prisma.emailDraft.findMany({
-    where: { subject: { contains: `${prefix}-${year}-` } },
-    select: { id: true },
-  });
-  return `${prefix}-${year}-${String(rows.length + 1).padStart(4, '0')}`;
+function buildRecipients(category: SuggestionCategory, provided?: string | null) {
+  if (category === 'PURCHASE') return PURCHASE_RECIPIENT;
+  if (category === 'MAINTENANCE' || category === 'CLEANING') return SUPPORT_RECIPIENTS;
+  return String(provided || '').trim();
 }
 
-function getCategoryLabel(category: SuggestionCategory) {
-  if (category === 'MAINTENANCE') return 'طلب صيانة';
-  if (category === 'CLEANING') return 'طلب نظافة';
-  if (category === 'PURCHASE') return 'طلب شراء مباشر';
-  return 'طلب آخر';
+function buildNotificationTitle(category: SuggestionCategory) {
+  return `${categoryMeta(category).notification} جديد`;
 }
 
-function getRecipientDisplayName(category: SuggestionCategory) {
-  if (category === 'PURCHASE') return 'الأستاذ نواف المحارب';
-  if (category === 'MAINTENANCE' || category === 'CLEANING') return 'سعادة مدير الخدمات المساندة';
-  return 'سعادة مدير الجهة المختصة';
-}
-
-function resolveRecipients(category: SuggestionCategory, externalRecipient?: string | null) {
-  if (category === 'PURCHASE') return PURCHASE_HANDLER_EMAIL;
-  if (category === 'MAINTENANCE' || category === 'CLEANING') return SUPPORT_EMAIL;
-  return String(externalRecipient || SUPPORT_EMAIL).trim() || SUPPORT_EMAIL;
-}
-
-function escapeHtml(value: any) {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-}
-
-function formatArabicDate(value: Date | string) {
-  return new Intl.DateTimeFormat('ar-SA', { year: 'numeric', month: 'long', day: 'numeric' }).format(new Date(value));
-}
-
-function buildFormalBody(params: {
-  category: SuggestionCategory;
+function buildExternalEmailHtml(params: {
+  recipientLabel: string;
+  introLine: string;
   requestCode: string;
-  createdAt: Date | string;
-  title: string;
-  description: string;
+  requestTitle: string;
+  createdAt: Date;
   requesterName: string;
   requesterDepartment: string;
   requesterEmail: string;
-  itemName?: string;
-  quantity?: number;
   location?: string;
-  requestSource?: string;
-  attachmentsText?: string;
+  quantity?: number | null;
+  itemName?: string;
+  description: string;
+  justification?: string;
   adminNotes?: string;
 }) {
-  const recipientName = getRecipientDisplayName(params.category);
-  const intro =
-    params.category === 'PURCHASE'
-      ? 'تهديكم إدارة عمليات التدريب أطيب التحيات، ونفيدكم بأنه ورد طلب شراء مباشر من الموظف الموضح أدناه، ونأمل التكرم برفعه على نظام الجامعة حسب الإجراء المعتمد.'
-      : 'تهديكم إدارة عمليات التدريب أطيب التحيات، وبناءً على إفادة الموظف الموضح أدناه وبعد اعتماد الطلب من المدير المختص، نأمل التكرم بتوجيه من يلزم لمعالجة الطلب وفق البيانات التالية.';
-
   const rows = [
     ['رقم الطلب', params.requestCode],
-    ['نوع الطلب', getCategoryLabel(params.category)],
+    ['عنوان الطلب', params.requestTitle],
+    ['التاريخ', new Intl.DateTimeFormat('ar-SA', { year: 'numeric', month: 'long', day: 'numeric' }).format(new Date(params.createdAt))],
     ['مقدم الطلب', params.requesterName],
     ['الإدارة', params.requesterDepartment || '—'],
     ['البريد الإلكتروني', params.requesterEmail || '—'],
-    ['التاريخ', formatArabicDate(params.createdAt)],
     ['الموقع', params.location || '—'],
-    ['البند/العنصر', params.itemName || '—'],
     ['الكمية', params.quantity ? String(params.quantity) : '—'],
-    ['وصف الطلب', params.description || '—'],
-    ['مصدر الحاجة', params.requestSource || '—'],
-    ['المرفقات', params.attachmentsText || 'لا يوجد'],
+    ['العنصر المطلوب', params.itemName || '—'],
+    ['سبب الطلب', params.description || '—'],
   ];
+  if (params.justification) rows.push(['إيضاحات إضافية', params.justification]);
+  if (params.adminNotes) rows.push(['توجيه المدير', params.adminNotes]);
+
+  const tableRows = rows.map(([label, value]) => `<tr><td style="padding:10px 12px;border:1px solid #d6d7d4;font-weight:700;background:#f8fbfb;width:180px;">${label}</td><td style="padding:10px 12px;border:1px solid #d6d7d4;">${value}</td></tr>`).join('');
 
   return `
-  <div dir="rtl" style="font-family:Cairo,Tahoma,Arial,sans-serif;color:#1f2937;line-height:1.9;background:#ffffff;padding:24px;">
-    <div style="font-size:18px;font-weight:700;color:#016564;margin-bottom:14px;">${escapeHtml(recipientName)} سلمه الله</div>
+  <div dir="rtl" style="font-family:Cairo,Tahoma,Arial,sans-serif;color:#1f2937;line-height:1.9;">
+    <div style="font-size:18px;font-weight:700;margin-bottom:12px;">${params.recipientLabel}</div>
     <div style="margin-bottom:12px;">السلام عليكم ورحمة الله وبركاته،</div>
-    <div style="margin-bottom:16px;">${escapeHtml(intro)}</div>
-    <table style="width:100%;border-collapse:collapse;border:1px solid #d6d7d4;margin:12px 0 18px 0;">
-      <tbody>
-        ${rows
-          .map(
-            ([label, value]) => `<tr><td style="width:28%;padding:10px 12px;border:1px solid #d6d7d4;background:#f8fbfb;font-weight:700;color:#016564;vertical-align:top;">${escapeHtml(label)}</td><td style="padding:10px 12px;border:1px solid #d6d7d4;vertical-align:top;">${escapeHtml(value)}</td></tr>`
-          )
-          .join('')}
-      </tbody>
-    </table>
-    ${params.adminNotes ? `<div style="margin-bottom:16px;"><strong>ملاحظة المدير:</strong> ${escapeHtml(params.adminNotes)}</div>` : ''}
-    <div style="margin-top:8px;">نأمل منكم التكرم باتخاذ ما يلزم حيال الطلب، ولكم خالص الشكر والتقدير.</div>
-    <div style="margin-top:18px;">فريق إدارة عمليات التدريب</div>
+    <div style="margin-bottom:12px;">تهديكم إدارة عمليات التدريب أطيب التحيات، وبناءً على إفادة الموظف الموضح اسمه أدناه، نأمل التكرم بالاطلاع على الطلب التالي واتخاذ ما يلزم حيال معالجته:</div>
+    <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px;">${tableRows}</table>
+    <div style="margin-top:14px;">نأمل منكم التكرم بتوجيه من يلزم لمعالجة المطلوب، وتقبلوا خالص التحية.</div>
+    <div style="margin-top:18px;font-weight:700;">فريق عمل إدارة عمليات التدريب<br/>وكالة الجامعة للتدريب</div>
   </div>`;
 }
 
-async function notifyManagersAboutSuggestion(input: { suggestionId: string; category: SuggestionCategory; code: string; title: string; requesterName: string }) {
+async function notifyManagersAboutSuggestion(params: { suggestionId: string; category: SuggestionCategory; title: string; requesterName: string; code: string; }) {
   const managers = await prisma.user.findMany({
-    where: { roles: { has: Role.MANAGER }, status: Status.ACTIVE },
+    where: { status: Status.ACTIVE, roles: { has: Role.MANAGER } },
     select: { id: true },
   });
-  const label = getCategoryLabel(input.category);
+  if (!managers.length) return;
   await prisma.notification.createMany({
-    data: managers.map((user) => ({
-      userId: user.id,
-      type: `NEW_${input.category}`,
-      title: `${label} جديد`,
-      message: `تم رفع ${label} برقم ${input.code} من ${input.requesterName}`,
-      link: `/suggestions?open=${input.suggestionId}`,
-      entityId: input.suggestionId,
+    data: managers.map((manager) => ({
+      userId: manager.id,
+      type: 'SUGGESTION_PENDING',
+      title: buildNotificationTitle(params.category),
+      message: `تم رفع ${categoryMeta(params.category).label} برقم ${params.code} من ${params.requesterName}`,
+      link: '/suggestions',
+      entityId: params.suggestionId,
       entityType: 'suggestion',
-      isRead: false,
     })),
-    skipDuplicates: false,
   });
 }
 
-async function notifyRequesterAboutSuggestion(input: { requesterId: string; suggestionId: string; category: SuggestionCategory; code: string; action: 'APPROVED' | 'REJECTED'; reason?: string }) {
-  const label = getCategoryLabel(input.category);
+async function notifyRequesterAboutSuggestion(params: { requesterId: string; suggestionId: string; category: SuggestionCategory; title: string; action: 'APPROVED' | 'REJECTED'; reason?: string; }) {
   await prisma.notification.create({
     data: {
-      userId: input.requesterId,
-      type: `${input.action}_${input.category}`,
-      title: input.action === 'APPROVED' ? `${label} تم اعتماده` : `${label} تم رفضه`,
-      message:
-        input.action === 'APPROVED'
-          ? `تم اعتماد ${label} برقم ${input.code}`
-          : `تم رفض ${label} برقم ${input.code}${input.reason ? ` — السبب: ${input.reason}` : ''}`,
-      link: `/suggestions?open=${input.suggestionId}`,
-      entityId: input.suggestionId,
+      userId: params.requesterId,
+      type: `SUGGESTION_${params.action}`,
+      title: params.action === 'APPROVED' ? `${categoryMeta(params.category).label} تمت الموافقة عليه` : `${categoryMeta(params.category).label} تم رفضه`,
+      message: params.action === 'APPROVED' ? `تم اعتماد ${params.title}` : `تم رفض ${params.title}${params.reason ? `: ${params.reason}` : ''}`,
+      link: '/suggestions',
+      entityId: params.suggestionId,
       entityType: 'suggestion',
-      isRead: false,
     },
   });
+}
+
+function mapSuggestionRow(item: any, requesterMap: Map<string, any>) {
+  const justificationData = parseJsonObject(item.justification);
+  const adminData = parseJsonObject(item.adminNotes);
+  const requester = requesterMap.get(item.requesterId) || null;
+  return {
+    ...item,
+    code: justificationData.publicCode || adminData.linkedCode || item.id,
+    requester,
+    itemName: justificationData.itemName || '',
+    quantity: justificationData.quantity || null,
+    location: justificationData.location || '',
+    targetDepartment: adminData.targetDepartment || justificationData.targetDepartment || null,
+    linkedDraftId: adminData.linkedDraftId || null,
+    linkedCode: adminData.linkedCode || null,
+  };
 }
 
 export async function GET(request: NextRequest) {
   try {
     const sessionUser = await resolveSessionUser(request);
-    const categoryParam = request.nextUrl.searchParams.get('category');
-    const where: any = {};
-    if (categoryParam) where.category = normalizeCategory(categoryParam);
-    if (sessionUser.activeRole !== Role.MANAGER) where.requesterId = sessionUser.id;
+    const categoryParam = request.nextUrl.searchParams.get('category') || request.nextUrl.searchParams.get('type') || '';
+    const category = categoryParam ? normalizeCategory(categoryParam) : null;
 
-    const [suggestions, users, codeMap] = await Promise.all([
-      prisma.suggestion.findMany({ where, orderBy: { createdAt: 'desc' } }),
-      prisma.user.findMany({
-        where: { id: { in: (await prisma.suggestion.findMany({ where, select: { requesterId: true } })).map((s) => s.requesterId) } },
-        select: { id: true, fullName: true, department: true, email: true },
-      }),
-      buildSuggestionCodeMap(),
-    ]);
+    const where: any = {
+      ...(category ? { category } : {}),
+      ...(sessionUser.role === Role.MANAGER ? {} : { requesterId: sessionUser.id }),
+    };
 
-    const usersMap = new Map(users.map((u) => [u.id, u]));
+    const suggestions = await prisma.suggestion.findMany({ where, orderBy: { createdAt: 'desc' } });
+    const users = await prisma.user.findMany({
+      where: { id: { in: [...new Set(suggestions.map((s) => s.requesterId))] } },
+      select: { id: true, fullName: true, department: true, email: true, roles: true },
+    });
+    const requesterMap = new Map(users.map((u) => [u.id, { ...u, role: u.roles?.[0] || Role.USER }]));
+    const rows = suggestions.map((item) => mapSuggestionRow(item, requesterMap));
+
+    const statsBase = sessionUser.role === Role.MANAGER ? suggestions : suggestions.filter((s) => s.requesterId === sessionUser.id);
+    const countBy = (cat: SuggestionCategory, status?: SuggestionStatus) => statsBase.filter((row) => row.category === cat && (!status || row.status === status)).length;
+
     return NextResponse.json({
-      data: suggestions.map((item) => ({
-        ...item,
-        code: codeMap.get(item.id) || item.id,
-        requester: usersMap.get(item.requesterId) || null,
-      })),
+      data: rows,
       stats: {
-        total: suggestions.length,
-        pending: suggestions.filter((s) => s.status === SuggestionStatus.PENDING || s.status === SuggestionStatus.UNDER_REVIEW).length,
-        approved: suggestions.filter((s) => s.status === SuggestionStatus.APPROVED || s.status === SuggestionStatus.IMPLEMENTED).length,
-        rejected: suggestions.filter((s) => s.status === SuggestionStatus.REJECTED).length,
+        total: statsBase.length,
+        pending: statsBase.filter((row) => row.status === SuggestionStatus.PENDING).length,
+        approved: statsBase.filter((row) => row.status === SuggestionStatus.APPROVED || row.status === SuggestionStatus.IMPLEMENTED).length,
+        rejected: statsBase.filter((row) => row.status === SuggestionStatus.REJECTED).length,
+        maintenancePending: countBy('MAINTENANCE', SuggestionStatus.PENDING),
+        cleaningPending: countBy('CLEANING', SuggestionStatus.PENDING),
+        purchasePending: countBy('PURCHASE', SuggestionStatus.PENDING),
+        otherPending: countBy('OTHER', SuggestionStatus.PENDING),
       },
     });
   } catch (error: any) {
@@ -333,6 +274,7 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const sessionUser = await resolveSessionUser(request);
+
     const category = normalizeCategory(body.category);
     const priority = normalizePriority(body.priority);
     const itemName = String(body.itemName || '').trim();
@@ -344,26 +286,20 @@ export async function POST(request: NextRequest) {
     const area = String(body.area || '').trim();
     const attachments = Array.isArray(body.attachments) ? body.attachments : [];
     const description = String(body.description || '').trim();
-    let title = String(body.title || '').trim() || getCategoryLabel(category);
+    const title = String(body.title || '').trim() || categoryMeta(category).label;
 
     if (!description) {
-      return NextResponse.json({ error: 'يرجى إدخال وصف واضح للطلب' }, { status: 400 });
+      return NextResponse.json({ error: 'يرجى كتابة سبب الطلب أو الملاحظة' }, { status: 400 });
     }
-    if ((category === 'MAINTENANCE' || category === 'CLEANING') && !area) {
-      return NextResponse.json({ error: `أكمل حقول ${getCategoryLabel(category)} المطلوبة` }, { status: 400 });
-    }
-    if (category === 'PURCHASE' && !itemName) {
-      return NextResponse.json({ error: 'أكمل حقول طلب الشراء المباشر المطلوبة' }, { status: 400 });
-    }
-    if (category === 'OTHER' && !title) {
-      title = 'طلب آخر';
-    }
+
+    const publicCode = await generatePublicCode(category);
 
     const suggestion = await prisma.suggestion.create({
       data: {
         title,
         description,
         justification: JSON.stringify({
+          publicCode,
           itemName,
           quantity,
           location,
@@ -380,38 +316,37 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    const codeMap = await buildSuggestionCodeMap();
-    const code = codeMap.get(suggestion.id) || suggestion.id;
-
     await prisma.auditLog.create({
       data: {
         userId: sessionUser.id,
         action: 'CREATE_SUGGESTION',
         entity: 'Suggestion',
         entityId: suggestion.id,
-        details: JSON.stringify({ code, title, category }),
+        details: JSON.stringify({ title, category, publicCode, itemName, quantity, location }),
       },
     });
 
     await notifyManagersAboutSuggestion({
       suggestionId: suggestion.id,
       category,
-      code,
       title,
       requesterName: sessionUser.fullName || 'مستخدم النظام',
+      code: publicCode,
     });
 
-    return NextResponse.json({ data: { ...suggestion, code } }, { status: 201 });
+    return NextResponse.json({ data: { ...suggestion, code: publicCode } }, { status: 201 });
   } catch (error: any) {
     return NextResponse.json({ error: error.message || 'تعذر إنشاء الطلب' }, { status: 400 });
   }
 }
 
-async function processSuggestionAction(request: NextRequest) {
+export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json();
     const sessionUser = await resolveSessionUser(request);
-    if (sessionUser.activeRole !== Role.MANAGER) return NextResponse.json({ error: 'غير مصرح' }, { status: 403 });
+    if (sessionUser.role !== Role.MANAGER) {
+      return NextResponse.json({ error: 'غير مصرح' }, { status: 403 });
+    }
 
     const suggestionId = String(body.suggestionId || '').trim();
     const action = String(body.action || '').trim().toLowerCase();
@@ -425,37 +360,33 @@ async function processSuggestionAction(request: NextRequest) {
 
     const requester = await prisma.user.findUnique({
       where: { id: suggestion.requesterId },
-      select: { fullName: true, department: true, email: true },
+      select: { id: true, fullName: true, department: true, email: true },
     });
-
     const justificationData = parseJsonObject(suggestion.justification);
     const category = normalizeCategory(suggestion.category);
-    const existingCode = (await buildSuggestionCodeMap()).get(suggestion.id) || suggestion.id;
+    const publicCode = String(justificationData.publicCode || await generatePublicCode(category));
+    const itemName = String(justificationData.itemName || '').trim();
+    const quantity = Math.max(1, Number(justificationData.quantity || 1));
+    const location = String(justificationData.location || '').trim();
+    const externalRecipient = String(justificationData.externalRecipient || '').trim();
 
     if (action === 'reject') {
       const updated = await prisma.suggestion.update({
         where: { id: suggestionId },
-        data: { status: SuggestionStatus.REJECTED, adminNotes: JSON.stringify({ adminNotes, linkedCode: existingCode }) },
+        data: { status: SuggestionStatus.REJECTED, adminNotes: JSON.stringify({ adminNotes, publicCode, targetDepartment }) },
       });
-      await notifyRequesterAboutSuggestion({ requesterId: suggestion.requesterId, suggestionId, category, code: existingCode, action: 'REJECTED', reason: adminNotes });
-      return NextResponse.json({ data: { ...updated, code: existingCode } });
+      await notifyRequesterAboutSuggestion({ requesterId: suggestion.requesterId, suggestionId, category, title: suggestion.title, action: 'REJECTED', reason: adminNotes });
+      return NextResponse.json({ data: { ...updated, code: publicCode } });
     }
 
     if (action !== 'approve') return NextResponse.json({ error: 'الإجراء غير صالح' }, { status: 400 });
 
-    const itemName = String(justificationData.itemName || '').trim() || String(justificationData.area || '').trim();
-    const quantity = Math.max(1, Number(justificationData.quantity || 1));
-    const location = String(justificationData.location || '').trim();
-    const requestSource = String(justificationData.requestSource || '').trim();
-    const attachments = Array.isArray(justificationData.attachments) ? justificationData.attachments : [];
-    const attachmentsText = attachments.length > 0 ? attachments.map((a: any) => a.filename || a.name).filter(Boolean).join(' ، ') : 'لا يوجد';
-
-    let linkedCode = existingCode;
-    let recipient = resolveRecipients(category, justificationData.externalRecipient);
+    const linkedCode = await generateLinkedCode(category);
+    let linkedEntityType = 'EmailDraft';
+    let linkedEntityId = '';
 
     if (category === 'MAINTENANCE' || category === 'CLEANING') {
-      linkedCode = await generateMaintenanceCode(category);
-      await prisma.maintenanceRequest.create({
+      const maintenance = await prisma.maintenanceRequest.create({
         data: {
           code: linkedCode,
           requesterId: suggestion.requesterId,
@@ -463,47 +394,51 @@ async function processSuggestionAction(request: NextRequest) {
           description: suggestion.description,
           priority: suggestion.priority,
           status: MaintenanceStatus.APPROVED,
-          notes: [itemName, quantity ? `الكمية: ${quantity}` : '', location ? `الموقع: ${location}` : '', adminNotes ? `ملاحظة المدير: ${adminNotes}` : ''].filter(Boolean).join(' | '),
+          notes: adminNotes || null,
         },
       });
+      linkedEntityType = 'MaintenanceRequest';
+      linkedEntityId = maintenance.id;
     } else if (category === 'PURCHASE') {
-      linkedCode = await generatePurchaseCode();
-      recipient = PURCHASE_HANDLER_EMAIL;
-      await prisma.purchaseRequest.create({
+      const purchase = await prisma.purchaseRequest.create({
         data: {
           code: linkedCode,
           requesterId: suggestion.requesterId,
-          items: itemName ? `${itemName} × ${quantity}` : suggestion.title,
+          items: itemName || suggestion.title,
           reason: suggestion.description,
           budgetNote: adminNotes || null,
+          estimatedValue: null,
           targetDepartment,
           status: PurchaseStatus.APPROVED,
         },
       });
-    } else {
-      linkedCode = await generateOtherCode();
+      linkedEntityType = 'PurchaseRequest';
+      linkedEntityId = purchase.id;
     }
 
-    await prisma.emailDraft.create({
+    const recipient = buildRecipients(category, externalRecipient);
+    const recipientLabel = category === 'PURCHASE' ? 'سعادة الأستاذ نواف المحارب سلمه الله' : 'سعادة مدير الإدارة المختصة سلمه الله';
+    const introLine = category === 'PURCHASE' ? 'نأمل التكرم برفع الطلب على نظام الجامعة ERP واستكمال الإجراء.' : 'نأمل التكرم بتوجيه من يلزم لمعالجة المطلوب.';
+
+    const draft = await prisma.emailDraft.create({
       data: {
         sourceType: category.toLowerCase(),
-        sourceId: suggestion.id,
+        sourceId: linkedEntityId || suggestion.id,
         recipient,
-        subject: `${getCategoryLabel(category)} - ${linkedCode}`,
-        body: buildFormalBody({
-          category,
+        subject: `${suggestion.title} - ${linkedCode}`,
+        body: buildExternalEmailHtml({
+          recipientLabel,
+          introLine,
           requestCode: linkedCode,
+          requestTitle: suggestion.title,
           createdAt: suggestion.createdAt,
-          title: suggestion.title,
-          description: suggestion.description,
           requesterName: requester?.fullName || '—',
           requesterDepartment: requester?.department || '—',
           requesterEmail: requester?.email || '—',
-          itemName,
-          quantity,
           location,
-          requestSource,
-          attachmentsText,
+          quantity,
+          itemName,
+          description: suggestion.description,
           adminNotes,
         }),
         status: 'DRAFT',
@@ -512,15 +447,26 @@ async function processSuggestionAction(request: NextRequest) {
 
     const updated = await prisma.suggestion.update({
       where: { id: suggestionId },
-      data: { status: SuggestionStatus.APPROVED, adminNotes: JSON.stringify({ adminNotes, targetDepartment, linkedCode }) },
+      data: {
+        status: SuggestionStatus.APPROVED,
+        adminNotes: JSON.stringify({
+          adminNotes,
+          targetDepartment,
+          linkedEntityType,
+          linkedEntityId,
+          linkedCode,
+          linkedDraftId: draft.id,
+          publicCode,
+        }),
+      },
     });
 
-    await notifyRequesterAboutSuggestion({ requesterId: suggestion.requesterId, suggestionId, category, code: linkedCode, action: 'APPROVED' });
-    return NextResponse.json({ data: { ...updated, code: linkedCode }, linkedCode });
+    await notifyRequesterAboutSuggestion({ requesterId: suggestion.requesterId, suggestionId, category, title: suggestion.title, action: 'APPROVED' });
+
+    return NextResponse.json({ data: { ...updated, code: publicCode }, linkedEntityType, linkedEntityId, linkedCode, linkedDraftId: draft.id });
   } catch (error: any) {
     return NextResponse.json({ error: error.message || 'تعذر معالجة الطلب' }, { status: 400 });
   }
 }
 
-export const PATCH = processSuggestionAction;
-export const PUT = processSuggestionAction;
+export const PUT = PATCH;
