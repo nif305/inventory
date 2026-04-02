@@ -672,21 +672,12 @@ function UnifiedDashboard() {
 
     const fallbackOpenMaintenance = maintenance.filter((item) => isOpenStatus(item.status)).length;
     const fallbackOpenPurchases = purchases.filter((item) => isOpenStatus(item.status)).length;
-    const fallbackMaintenancePending = suggestions.filter(
-      (item) => String(item.category || '').toUpperCase() === 'MAINTENANCE' && ['PENDING', 'UNDER_REVIEW'].includes(String(item.status || '').toUpperCase())
+    const fallbackCleaningRequests = suggestions.filter(
+      (item) => String(item.category || '').toUpperCase() === 'CLEANING' && isOpenStatus(item.status)
     ).length;
-    const fallbackCleaningPending = suggestions.filter(
-      (item) => String(item.category || '').toUpperCase() === 'CLEANING' && ['PENDING', 'UNDER_REVIEW'].includes(String(item.status || '').toUpperCase())
+    const fallbackOtherRequests = suggestions.filter(
+      (item) => String(item.category || '').toUpperCase() !== 'CLEANING' && isOpenStatus(item.status)
     ).length;
-    const fallbackPurchasePending = suggestions.filter(
-      (item) => String(item.category || '').toUpperCase() === 'PURCHASE' && ['PENDING', 'UNDER_REVIEW'].includes(String(item.status || '').toUpperCase())
-    ).length;
-    const fallbackOtherPending = suggestions.filter(
-      (item) => !['MAINTENANCE', 'CLEANING', 'PURCHASE'].includes(String(item.category || '').toUpperCase()) && ['PENDING', 'UNDER_REVIEW'].includes(String(item.status || '').toUpperCase())
-    ).length;
-
-    const fallbackCleaningRequests = fallbackCleaningPending;
-    const fallbackOtherRequests = fallbackOtherPending;
 
     const fallbackUnreadNotifications = notifications.filter((item) => !item.isRead).length;
 
@@ -709,12 +700,13 @@ function UnifiedDashboard() {
 
       openMaintenance: pickStat(data.maintenanceRaw, ['stats.open', 'stats.pending', 'stats.active'], fallbackOpenMaintenance),
       openPurchases: pickStat(data.purchasesRaw, ['stats.open', 'stats.pending', 'stats.active'], fallbackOpenPurchases),
-      maintenancePending: pickStat(data.suggestionsRaw, ['stats.maintenancePending', 'stats.maintenance', 'stats.maintenanceRequests'], fallbackMaintenancePending),
-      cleaningPending: pickStat(data.suggestionsRaw, ['stats.cleaningPending', 'stats.cleaning', 'stats.cleaningRequests'], fallbackCleaningPending),
-      purchasePending: pickStat(data.suggestionsRaw, ['stats.purchasePending', 'stats.purchase', 'stats.purchaseRequests'], fallbackPurchasePending),
-      otherPending: pickStat(data.suggestionsRaw, ['stats.otherPending', 'stats.other', 'stats.otherRequests'], fallbackOtherPending),
-      cleaningRequests: pickStat(data.suggestionsRaw, ['stats.cleaningPending', 'stats.cleaning', 'stats.cleaningRequests'], fallbackCleaningRequests),
-      otherRequests: pickStat(data.suggestionsRaw, ['stats.otherPending', 'stats.other', 'stats.otherRequests'], fallbackOtherRequests),
+      cleaningRequests: pickStat(data.suggestionsRaw, ['stats.cleaning', 'stats.cleaningRequests'], fallbackCleaningRequests),
+      otherRequests: pickStat(data.suggestionsRaw, ['stats.other', 'stats.otherRequests'], fallbackOtherRequests),
+
+      maintenancePending: pickStat(data.suggestionsRaw, ['stats.maintenancePending', 'stats.maintenance', 'stats.maintenanceRequests'], suggestions.filter((item) => String(item.category || '').toUpperCase() === 'MAINTENANCE' && String(item.status || '').toUpperCase() === 'PENDING').length),
+      cleaningPending: pickStat(data.suggestionsRaw, ['stats.cleaningPending', 'stats.cleaning', 'stats.cleaningRequests'], suggestions.filter((item) => String(item.category || '').toUpperCase() === 'CLEANING' && String(item.status || '').toUpperCase() === 'PENDING').length),
+      purchasePending: pickStat(data.suggestionsRaw, ['stats.purchasePending', 'stats.purchase', 'stats.purchaseRequests'], suggestions.filter((item) => String(item.category || '').toUpperCase() === 'PURCHASE' && String(item.status || '').toUpperCase() === 'PENDING').length),
+      otherPending: pickStat(data.suggestionsRaw, ['stats.otherPending', 'stats.other', 'stats.otherRequests'], suggestions.filter((item) => String(item.category || '').toUpperCase() === 'OTHER' && String(item.status || '').toUpperCase() === 'PENDING').length),
 
       unreadNotifications: pickStat(data.notificationsRaw, ['stats.unread', 'stats.unreadCount', 'unread'], fallbackUnreadNotifications),
       requestItemsCount: pickStat(data.requestsRaw, ['stats.items', 'stats.requestItems', 'stats.totalItems'], countRequestItems(requests)),

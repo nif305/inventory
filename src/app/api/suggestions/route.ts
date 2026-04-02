@@ -6,6 +6,7 @@ const SUPPORT_RECIPIENTS = 'ssd@nauss.edu.sa,AAlosaimi@nauss.edu.sa';
 const PURCHASE_RECIPIENT = 'wa.n1@nauss.edu.sa';
 
 type SuggestionCategory = 'MAINTENANCE' | 'CLEANING' | 'PURCHASE' | 'OTHER';
+
 type JsonObject = Record<string, any>;
 
 function mapRole(role: string): Role {
@@ -33,7 +34,8 @@ function normalizePriority(value: any): Priority {
 
 function normalizeTargetDepartment(value: any) {
   const normalized = String(value || '').trim().toUpperCase();
-  return normalized || null;
+  if (!normalized) return null;
+  return normalized;
 }
 
 function parseJsonObject(value: any): JsonObject {
@@ -60,8 +62,8 @@ async function resolveSessionUser(request: NextRequest) {
   ).trim();
 
   const activeRole = mapRole(activeRoleRaw);
-  let user = null;
 
+  let user = null;
   if (cookieId) {
     user = await prisma.user.findUnique({
       where: { id: cookieId },
@@ -83,7 +85,9 @@ async function resolveSessionUser(request: NextRequest) {
 
   if (!user) throw new Error('تعذر التحقق من المستخدم الحالي. أعد تسجيل الدخول ثم حاول مرة أخرى.');
   if (user.status !== Status.ACTIVE) throw new Error('الحساب غير نشط.');
-  if (!Array.isArray(user.roles) || !user.roles.includes(activeRole)) throw new Error('الدور النشط غير صالح لهذا المستخدم.');
+  if (!Array.isArray(user.roles) || !user.roles.includes(activeRole)) {
+    throw new Error('الدور النشط غير صالح لهذا المستخدم.');
+  }
 
   return { ...user, role: activeRole };
 }
@@ -101,33 +105,61 @@ function categoryMeta(category: SuggestionCategory) {
   }
 }
 
-function extractSerial(code: string, prefix: string, year: number) {
-  const match = String(code || '').match(new RegExp(`^${prefix}-${year}-(\\d{4})$`));
-  return match ? Number(match[1]) : 0;
-}
-
 async function generatePublicCode(category: SuggestionCategory) {
   const year = new Date().getFullYear();
   const prefix = categoryMeta(category).prefix;
-  const existing = await prisma.suggestion.findMany({ where: { category }, select: { justification: true, adminNotes: true } });
+  const existing = await prisma.suggestion.findMany({
+    where: { category },
+    select: { justification: true },
+  });
   let maxSerial = 0;
   for (const row of existing) {
-    const justification = parseJsonObject(row.justification);
-    const admin = parseJsonObject(row.adminNotes);
-    maxSerial = Math.max(
-      maxSerial,
-      extractSerial(String(justification.publicCode || ''), prefix, year),
-      extractSerial(String(admin.publicCode || ''), prefix, year),
-      extractSerial(String(admin.linkedCode || ''), prefix, year),
-    );
+    const parsed = parseJsonObject(row.justification);
+    const code = String(parsed.publicCode || '');
+    const match = code.match(/-(\d{4})$/);
+    if (match) maxSerial = Math.max(maxSerial, Number(match[1]));
   }
+  return `${prefix}-${year}-${String(maxSerial + 1).padStart(4, '0')}`;
+}
+
+async function generateLinkedCode(category: SuggestionCategory) {
+  const year = new Date().getFullYear();
+  const prefix = categoryMeta(category).prefix;
+  let maxSerial = 0;
+
+  const suggestionRows = await prisma.suggestion.findMany({
+    where: { category },
+    select: { adminNotes: true },
+  });
+
+  for (const row of suggestionRows) {
+    const parsed = parseJsonObject(row.adminNotes);
+    const code = String(parsed.linkedCode || '');
+    const match = code.match(new RegExp(`^${prefix}-${year}-(\d{4})$`));
+    if (match) maxSerial = Math.max(maxSerial, Number(match[1]));
+  }
+
+  const maintenanceRows = await prisma.maintenanceRequest.findMany({ select: { code: true } });
+  for (const row of maintenanceRows) {
+    const code = String(row.code || '');
+    const match = code.match(new RegExp(`^${prefix}-${year}-(\d{4})$`));
+    if (match) maxSerial = Math.max(maxSerial, Number(match[1]));
+  }
+
+  const purchaseRows = await prisma.purchaseRequest.findMany({ select: { code: true } });
+  for (const row of purchaseRows) {
+    const code = String(row.code || '');
+    const match = code.match(new RegExp(`^${prefix}-${year}-(\d{4})$`));
+    if (match) maxSerial = Math.max(maxSerial, Number(match[1]));
+  }
+
   return `${prefix}-${year}-${String(maxSerial + 1).padStart(4, '0')}`;
 }
 
 function buildRecipients(category: SuggestionCategory, provided?: string | null) {
   if (category === 'PURCHASE') return PURCHASE_RECIPIENT;
   if (category === 'MAINTENANCE' || category === 'CLEANING') return SUPPORT_RECIPIENTS;
-  return String(provided || SUPPORT_RECIPIENTS).trim();
+  return String(provided || '').trim();
 }
 
 function buildNotificationTitle(category: SuggestionCategory) {
@@ -136,6 +168,7 @@ function buildNotificationTitle(category: SuggestionCategory) {
 
 function buildExternalEmailHtml(params: {
   recipientLabel: string;
+  introLine: string;
   requestCode: string;
   requestTitle: string;
   createdAt: Date;
@@ -146,7 +179,7 @@ function buildExternalEmailHtml(params: {
   quantity?: number | null;
   itemName?: string;
   description: string;
-  requestSource?: string;
+  justification?: string;
   adminNotes?: string;
 }) {
   const rows = [
@@ -160,16 +193,11 @@ function buildExternalEmailHtml(params: {
     ['الكمية', params.quantity ? String(params.quantity) : '—'],
     ['العنصر المطلوب', params.itemName || '—'],
     ['سبب الطلب', params.description || '—'],
-    ['مصدر الحاجة', params.requestSource || '—'],
   ];
+  if (params.justification) rows.push(['إيضاحات إضافية', params.justification]);
   if (params.adminNotes) rows.push(['توجيه المدير', params.adminNotes]);
 
-  const tableRows = rows
-    .map(
-      ([label, value]) =>
-        `<tr><td style="padding:10px 12px;border:1px solid #d6d7d4;font-weight:700;background:#f8fbfb;width:180px;">${label}</td><td style="padding:10px 12px;border:1px solid #d6d7d4;">${value}</td></tr>`
-    )
-    .join('');
+  const tableRows = rows.map(([label, value]) => `<tr><td style="padding:10px 12px;border:1px solid #d6d7d4;font-weight:700;background:#f8fbfb;width:180px;">${label}</td><td style="padding:10px 12px;border:1px solid #d6d7d4;">${value}</td></tr>`).join('');
 
   return `
   <div dir="rtl" style="font-family:Cairo,Tahoma,Arial,sans-serif;color:#1f2937;line-height:1.9;">
@@ -182,7 +210,7 @@ function buildExternalEmailHtml(params: {
   </div>`;
 }
 
-async function notifyManagersAboutSuggestion(params: { suggestionId: string; category: SuggestionCategory; title: string; requesterName: string; code: string }) {
+async function notifyManagersAboutSuggestion(params: { suggestionId: string; category: SuggestionCategory; title: string; requesterName: string; code: string; }) {
   const managers = await prisma.user.findMany({
     where: { status: Status.ACTIVE, roles: { has: Role.MANAGER } },
     select: { id: true },
@@ -201,7 +229,7 @@ async function notifyManagersAboutSuggestion(params: { suggestionId: string; cat
   });
 }
 
-async function notifyRequesterAboutSuggestion(params: { requesterId: string; suggestionId: string; category: SuggestionCategory; title: string; action: 'APPROVED' | 'REJECTED'; reason?: string }) {
+async function notifyRequesterAboutSuggestion(params: { requesterId: string; suggestionId: string; category: SuggestionCategory; title: string; action: 'APPROVED' | 'REJECTED'; reason?: string; }) {
   await prisma.notification.create({
     data: {
       userId: params.requesterId,
@@ -226,7 +254,6 @@ function mapSuggestionRow(item: any, requesterMap: Map<string, any>) {
     itemName: justificationData.itemName || '',
     quantity: justificationData.quantity || null,
     location: justificationData.location || '',
-    requestSource: justificationData.requestSource || '',
     targetDepartment: adminData.targetDepartment || justificationData.targetDepartment || null,
     linkedDraftId: adminData.linkedDraftId || null,
     linkedCode: adminData.linkedCode || null,
@@ -253,24 +280,19 @@ export async function GET(request: NextRequest) {
     const rows = suggestions.map((item) => mapSuggestionRow(item, requesterMap));
 
     const statsBase = sessionUser.role === Role.MANAGER ? suggestions : suggestions.filter((s) => s.requesterId === sessionUser.id);
-    const pendingState = (row: any) => row.status === SuggestionStatus.PENDING || row.status === SuggestionStatus.UNDER_REVIEW;
-    const countPending = (cat: SuggestionCategory) => statsBase.filter((row) => normalizeCategory(row.category) === cat && pendingState(row)).length;
+    const countBy = (cat: SuggestionCategory, status?: SuggestionStatus) => statsBase.filter((row) => row.category === cat && (!status || row.status === status)).length;
 
     return NextResponse.json({
       data: rows,
       stats: {
         total: statsBase.length,
-        pending: statsBase.filter((row) => pendingState(row)).length,
+        pending: statsBase.filter((row) => row.status === SuggestionStatus.PENDING).length,
         approved: statsBase.filter((row) => row.status === SuggestionStatus.APPROVED || row.status === SuggestionStatus.IMPLEMENTED).length,
         rejected: statsBase.filter((row) => row.status === SuggestionStatus.REJECTED).length,
-        maintenancePending: countPending('MAINTENANCE'),
-        cleaningPending: countPending('CLEANING'),
-        purchasePending: countPending('PURCHASE'),
-        otherPending: countPending('OTHER'),
-        maintenance: countPending('MAINTENANCE'),
-        cleaning: countPending('CLEANING'),
-        purchase: countPending('PURCHASE'),
-        other: countPending('OTHER'),
+        maintenancePending: countBy('MAINTENANCE', SuggestionStatus.PENDING),
+        cleaningPending: countBy('CLEANING', SuggestionStatus.PENDING),
+        purchasePending: countBy('PURCHASE', SuggestionStatus.PENDING),
+        otherPending: countBy('OTHER', SuggestionStatus.PENDING),
       },
     });
   } catch (error: any) {
@@ -334,7 +356,13 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    await notifyManagersAboutSuggestion({ suggestionId: suggestion.id, category, title, requesterName: sessionUser.fullName || 'مستخدم النظام', code: publicCode });
+    await notifyManagersAboutSuggestion({
+      suggestionId: suggestion.id,
+      category,
+      title,
+      requesterName: sessionUser.fullName || 'مستخدم النظام',
+      code: publicCode,
+    });
 
     return NextResponse.json({ data: { ...suggestion, code: publicCode } }, { status: 201 });
   } catch (error: any) {
@@ -346,17 +374,23 @@ export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json();
     const sessionUser = await resolveSessionUser(request);
-    if (sessionUser.role !== Role.MANAGER) return NextResponse.json({ error: 'غير مصرح' }, { status: 403 });
+    if (sessionUser.role !== Role.MANAGER) {
+      return NextResponse.json({ error: 'غير مصرح' }, { status: 403 });
+    }
 
     const suggestionId = String(body.suggestionId || '').trim();
     const action = String(body.action || '').trim().toLowerCase();
-    const adminNotesText = String(body.adminNotes || '').trim();
+    const adminNotes = String(body.adminNotes || '').trim();
     const targetDepartment = normalizeTargetDepartment(body.targetDepartment);
 
-    if (!suggestionId || !action) return NextResponse.json({ error: 'البيانات غير مكتملة' }, { status: 400 });
+    if (!suggestionId || !action) {
+      return NextResponse.json({ error: 'البيانات غير مكتملة' }, { status: 400 });
+    }
 
     const suggestion = await prisma.suggestion.findUnique({ where: { id: suggestionId } });
-    if (!suggestion) return NextResponse.json({ error: 'الطلب غير موجود' }, { status: 404 });
+    if (!suggestion) {
+      return NextResponse.json({ error: 'الطلب غير موجود' }, { status: 404 });
+    }
 
     const requester = await prisma.user.findUnique({
       where: { id: suggestion.requesterId },
@@ -364,39 +398,71 @@ export async function PATCH(request: NextRequest) {
     });
 
     const justificationData = parseJsonObject(suggestion.justification);
-    const currentAdminData = parseJsonObject(suggestion.adminNotes);
+    const adminData = parseJsonObject(suggestion.adminNotes);
     const category = normalizeCategory(suggestion.category);
-    const publicCode = String(justificationData.publicCode || currentAdminData.publicCode || (await generatePublicCode(category)));
-    const linkedCode = String(currentAdminData.linkedCode || publicCode);
+    const publicCode = String(justificationData.publicCode || adminData.publicCode || await generatePublicCode(category));
     const itemName = String(justificationData.itemName || '').trim();
     const quantity = Math.max(1, Number(justificationData.quantity || 1));
     const location = String(justificationData.location || '').trim();
     const externalRecipient = String(justificationData.externalRecipient || '').trim();
-    const requestSource = String(justificationData.requestSource || '').trim();
 
     if (action === 'reject') {
       const updated = await prisma.suggestion.update({
         where: { id: suggestionId },
         data: {
           status: SuggestionStatus.REJECTED,
-          adminNotes: JSON.stringify({ ...currentAdminData, adminNotes: adminNotesText, publicCode, targetDepartment, linkedCode }),
+          adminNotes: JSON.stringify({
+            ...adminData,
+            adminNotes,
+            publicCode,
+            targetDepartment,
+          }),
         },
       });
-      await notifyRequesterAboutSuggestion({ requesterId: suggestion.requesterId, suggestionId, category, title: suggestion.title, action: 'REJECTED', reason: adminNotesText });
+
+      await notifyRequesterAboutSuggestion({
+        requesterId: suggestion.requesterId,
+        suggestionId,
+        category,
+        title: suggestion.title,
+        action: 'REJECTED',
+        reason: adminNotes,
+      });
+
       return NextResponse.json({ data: { ...updated, code: publicCode } });
     }
 
-    if (action !== 'approve') return NextResponse.json({ error: 'الإجراء غير صالح' }, { status: 400 });
+    if (action !== 'approve') {
+      return NextResponse.json({ error: 'الإجراء غير صالح' }, { status: 400 });
+    }
 
-    const result = await prisma.$transaction(async (tx) => {
-      let linkedEntityType = String(currentAdminData.linkedEntityType || (category === 'PURCHASE' ? 'PurchaseRequest' : category === 'OTHER' ? 'Suggestion' : 'MaintenanceRequest'));
-      let linkedEntityId = String(currentAdminData.linkedEntityId || '');
+    let linkedEntityType = String(adminData.linkedEntityType || '');
+    let linkedEntityId = String(adminData.linkedEntityId || '');
+    let linkedCode = String(adminData.linkedCode || '');
 
-      if (category === 'MAINTENANCE' || category === 'CLEANING') {
-        let maintenance = linkedEntityId ? await tx.maintenanceRequest.findUnique({ where: { id: linkedEntityId } }) : null;
-        if (!maintenance) maintenance = await tx.maintenanceRequest.findUnique({ where: { code: linkedCode } });
-        if (!maintenance) {
-          maintenance = await tx.maintenanceRequest.create({
+    if (category === 'MAINTENANCE' || category === 'CLEANING') {
+      if (linkedEntityId) {
+        const existing = await prisma.maintenanceRequest.findUnique({ where: { id: linkedEntityId } });
+        if (!existing) linkedEntityId = '';
+        else {
+          linkedEntityType = 'MaintenanceRequest';
+          linkedCode = existing.code || linkedCode;
+        }
+      }
+
+      if (!linkedEntityId && linkedCode) {
+        const existing = await prisma.maintenanceRequest.findFirst({ where: { code: linkedCode } });
+        if (existing) {
+          linkedEntityId = existing.id;
+          linkedEntityType = 'MaintenanceRequest';
+          linkedCode = existing.code || linkedCode;
+        }
+      }
+
+      if (!linkedEntityId) {
+        linkedCode = linkedCode || await generateLinkedCode(category);
+        try {
+          const maintenance = await prisma.maintenanceRequest.create({
             data: {
               code: linkedCode,
               requesterId: suggestion.requesterId,
@@ -404,115 +470,161 @@ export async function PATCH(request: NextRequest) {
               description: suggestion.description,
               priority: suggestion.priority,
               status: MaintenanceStatus.APPROVED,
-              notes: adminNotesText || null,
+              notes: adminNotes || null,
             },
           });
+          linkedEntityType = 'MaintenanceRequest';
+          linkedEntityId = maintenance.id;
+          linkedCode = maintenance.code;
+        } catch (error: any) {
+          const duplicate = await prisma.maintenanceRequest.findFirst({ where: { code: linkedCode } });
+          if (!duplicate) throw error;
+          linkedEntityType = 'MaintenanceRequest';
+          linkedEntityId = duplicate.id;
+          linkedCode = duplicate.code;
         }
-        linkedEntityType = 'MaintenanceRequest';
-        linkedEntityId = maintenance.id;
-      } else if (category === 'PURCHASE') {
-        let purchase = linkedEntityId ? await tx.purchaseRequest.findUnique({ where: { id: linkedEntityId } }) : null;
-        if (!purchase) purchase = await tx.purchaseRequest.findUnique({ where: { code: linkedCode } });
-        if (!purchase) {
-          purchase = await tx.purchaseRequest.create({
+      }
+    } else if (category === 'PURCHASE') {
+      if (linkedEntityId) {
+        const existing = await prisma.purchaseRequest.findUnique({ where: { id: linkedEntityId } });
+        if (!existing) linkedEntityId = '';
+        else {
+          linkedEntityType = 'PurchaseRequest';
+          linkedCode = existing.code || linkedCode;
+        }
+      }
+
+      if (!linkedEntityId && linkedCode) {
+        const existing = await prisma.purchaseRequest.findFirst({ where: { code: linkedCode } });
+        if (existing) {
+          linkedEntityId = existing.id;
+          linkedEntityType = 'PurchaseRequest';
+          linkedCode = existing.code || linkedCode;
+        }
+      }
+
+      if (!linkedEntityId) {
+        linkedCode = linkedCode || await generateLinkedCode(category);
+        try {
+          const purchase = await prisma.purchaseRequest.create({
             data: {
               code: linkedCode,
               requesterId: suggestion.requesterId,
               items: itemName || suggestion.title,
               reason: suggestion.description,
-              budgetNote: adminNotesText || null,
+              budgetNote: adminNotes || null,
               estimatedValue: null,
               targetDepartment,
               status: PurchaseStatus.APPROVED,
             },
           });
+          linkedEntityType = 'PurchaseRequest';
+          linkedEntityId = purchase.id;
+          linkedCode = purchase.code;
+        } catch (error: any) {
+          const duplicate = await prisma.purchaseRequest.findFirst({ where: { code: linkedCode } });
+          if (!duplicate) throw error;
+          linkedEntityType = 'PurchaseRequest';
+          linkedEntityId = duplicate.id;
+          linkedCode = duplicate.code;
         }
-        linkedEntityType = 'PurchaseRequest';
-        linkedEntityId = purchase.id;
       }
+    } else {
+      linkedEntityType = 'Suggestion';
+      linkedEntityId = suggestionId;
+      linkedCode = linkedCode || await generateLinkedCode(category);
+    }
 
-      const recipient = buildRecipients(category, externalRecipient);
-      const recipientLabel = category === 'PURCHASE' ? 'سعادة الأستاذ نواف المحارب سلمه الله' : 'سعادة مدير الإدارة المختصة سلمه الله';
-      const htmlBody = buildExternalEmailHtml({
-        recipientLabel,
-        requestCode: linkedCode,
-        requestTitle: suggestion.title,
-        createdAt: suggestion.createdAt,
-        requesterName: requester?.fullName || '—',
-        requesterDepartment: requester?.department || '—',
-        requesterEmail: requester?.email || '—',
-        location,
-        quantity,
-        itemName,
-        description: suggestion.description,
-        requestSource,
-        adminNotes: adminNotesText,
-      });
+    const recipient = buildRecipients(category, externalRecipient);
+    const recipientLabel = category === 'PURCHASE' ? 'سعادة الأستاذ نواف المحارب سلمه الله' : 'سعادة مدير الإدارة المختصة سلمه الله';
 
-      let draft = currentAdminData.linkedDraftId
-        ? await tx.emailDraft.findUnique({ where: { id: String(currentAdminData.linkedDraftId) } })
-        : null;
-      if (!draft) {
-        draft = await tx.emailDraft.findFirst({
-          where: {
-            sourceType: category.toLowerCase(),
-            sourceId: linkedEntityId || suggestion.id,
-          },
-          orderBy: { createdAt: 'desc' },
-        });
-      }
-      if (draft) {
-        draft = await tx.emailDraft.update({
-          where: { id: draft.id },
-          data: { recipient, subject: `${suggestion.title} - ${linkedCode}`, body: htmlBody },
-        });
-      } else {
-        draft = await tx.emailDraft.create({
-          data: {
-            sourceType: category.toLowerCase(),
-            sourceId: linkedEntityId || suggestion.id,
-            recipient,
-            subject: `${suggestion.title} - ${linkedCode}`,
-            body: htmlBody,
-            status: 'DRAFT',
-          },
-        });
-      }
+    let linkedDraftId = String(adminData.linkedDraftId || '');
+    let draft = null as any;
 
-      const updated = await tx.suggestion.update({
-        where: { id: suggestionId },
-        data: {
-          status: SuggestionStatus.APPROVED,
-          adminNotes: JSON.stringify({
-            ...currentAdminData,
-            adminNotes: adminNotesText,
-            targetDepartment,
-            linkedEntityType,
-            linkedEntityId,
-            linkedCode,
-            linkedDraftId: draft.id,
-            publicCode,
-          }),
+    if (linkedDraftId) {
+      draft = await prisma.emailDraft.findUnique({ where: { id: linkedDraftId } });
+    }
+
+    if (!draft) {
+      draft = await prisma.emailDraft.findFirst({
+        where: {
+          sourceType: category.toLowerCase(),
+          sourceId: linkedEntityId || suggestion.id,
         },
       });
+    }
 
-      return { updated, linkedEntityType, linkedEntityId, linkedDraftId: draft.id };
+    const draftBody = buildExternalEmailHtml({
+      recipientLabel,
+      requestCode: linkedCode,
+      requestTitle: suggestion.title,
+      createdAt: suggestion.createdAt,
+      requesterName: requester?.fullName || '—',
+      requesterDepartment: requester?.department || '—',
+      requesterEmail: requester?.email || '—',
+      location,
+      quantity,
+      itemName,
+      description: suggestion.description,
+      adminNotes,
     });
 
-    await notifyRequesterAboutSuggestion({ requesterId: suggestion.requesterId, suggestionId, category, title: suggestion.title, action: 'APPROVED' });
+    if (draft) {
+      draft = await prisma.emailDraft.update({
+        where: { id: draft.id },
+        data: {
+          recipient,
+          subject: `${suggestion.title} - ${linkedCode}`,
+          body: draftBody,
+          status: 'DRAFT',
+        },
+      });
+    } else {
+      draft = await prisma.emailDraft.create({
+        data: {
+          sourceType: category.toLowerCase(),
+          sourceId: linkedEntityId || suggestion.id,
+          recipient,
+          subject: `${suggestion.title} - ${linkedCode}`,
+          body: draftBody,
+          status: 'DRAFT',
+        },
+      });
+    }
+
+    const updated = await prisma.suggestion.update({
+      where: { id: suggestionId },
+      data: {
+        status: SuggestionStatus.APPROVED,
+        adminNotes: JSON.stringify({
+          ...adminData,
+          adminNotes,
+          targetDepartment,
+          linkedEntityType,
+          linkedEntityId,
+          linkedCode,
+          linkedDraftId: draft.id,
+          publicCode,
+        }),
+      },
+    });
+
+    await notifyRequesterAboutSuggestion({
+      requesterId: suggestion.requesterId,
+      suggestionId,
+      category,
+      title: suggestion.title,
+      action: 'APPROVED',
+    });
 
     return NextResponse.json({
-      data: { ...result.updated, code: publicCode, linkedDraftId: result.linkedDraftId, linkedCode },
-      linkedEntityType: result.linkedEntityType,
-      linkedEntityId: result.linkedEntityId,
+      data: { ...updated, code: publicCode },
+      linkedEntityType,
+      linkedEntityId,
       linkedCode,
-      linkedDraftId: result.linkedDraftId,
+      linkedDraftId: draft.id,
     });
   } catch (error: any) {
-    const message = String(error?.message || '');
-    if (message.includes('Unique constraint failed on the fields: (`code`)')) {
-      return NextResponse.json({ error: 'تم اعتماد هذا الطلب سابقًا أو أن رقم الطلب محجوز بالفعل. أعد تحميل الصفحة ثم حاول مرة أخرى.' }, { status: 409 });
-    }
     return NextResponse.json({ error: error.message || 'تعذر معالجة الطلب' }, { status: 400 });
   }
 }
