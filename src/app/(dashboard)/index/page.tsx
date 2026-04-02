@@ -672,12 +672,21 @@ function UnifiedDashboard() {
 
     const fallbackOpenMaintenance = maintenance.filter((item) => isOpenStatus(item.status)).length;
     const fallbackOpenPurchases = purchases.filter((item) => isOpenStatus(item.status)).length;
-    const fallbackCleaningRequests = suggestions.filter(
-      (item) => String(item.category || '').toUpperCase() === 'CLEANING' && isOpenStatus(item.status)
+    const fallbackMaintenancePending = suggestions.filter(
+      (item) => String(item.category || '').toUpperCase() === 'MAINTENANCE' && ['PENDING', 'UNDER_REVIEW'].includes(String(item.status || '').toUpperCase())
     ).length;
-    const fallbackOtherRequests = suggestions.filter(
-      (item) => String(item.category || '').toUpperCase() !== 'CLEANING' && isOpenStatus(item.status)
+    const fallbackCleaningPending = suggestions.filter(
+      (item) => String(item.category || '').toUpperCase() === 'CLEANING' && ['PENDING', 'UNDER_REVIEW'].includes(String(item.status || '').toUpperCase())
     ).length;
+    const fallbackPurchasePending = suggestions.filter(
+      (item) => String(item.category || '').toUpperCase() === 'PURCHASE' && ['PENDING', 'UNDER_REVIEW'].includes(String(item.status || '').toUpperCase())
+    ).length;
+    const fallbackOtherPending = suggestions.filter(
+      (item) => !['MAINTENANCE', 'CLEANING', 'PURCHASE'].includes(String(item.category || '').toUpperCase()) && ['PENDING', 'UNDER_REVIEW'].includes(String(item.status || '').toUpperCase())
+    ).length;
+
+    const fallbackCleaningRequests = fallbackCleaningPending;
+    const fallbackOtherRequests = fallbackOtherPending;
 
     const fallbackUnreadNotifications = notifications.filter((item) => !item.isRead).length;
 
@@ -700,8 +709,12 @@ function UnifiedDashboard() {
 
       openMaintenance: pickStat(data.maintenanceRaw, ['stats.open', 'stats.pending', 'stats.active'], fallbackOpenMaintenance),
       openPurchases: pickStat(data.purchasesRaw, ['stats.open', 'stats.pending', 'stats.active'], fallbackOpenPurchases),
-      cleaningRequests: pickStat(data.suggestionsRaw, ['stats.cleaning', 'stats.cleaningRequests'], fallbackCleaningRequests),
-      otherRequests: pickStat(data.suggestionsRaw, ['stats.other', 'stats.otherRequests'], fallbackOtherRequests),
+      maintenancePending: pickStat(data.suggestionsRaw, ['stats.maintenancePending', 'stats.maintenance', 'stats.maintenanceRequests'], fallbackMaintenancePending),
+      cleaningPending: pickStat(data.suggestionsRaw, ['stats.cleaningPending', 'stats.cleaning', 'stats.cleaningRequests'], fallbackCleaningPending),
+      purchasePending: pickStat(data.suggestionsRaw, ['stats.purchasePending', 'stats.purchase', 'stats.purchaseRequests'], fallbackPurchasePending),
+      otherPending: pickStat(data.suggestionsRaw, ['stats.otherPending', 'stats.other', 'stats.otherRequests'], fallbackOtherPending),
+      cleaningRequests: pickStat(data.suggestionsRaw, ['stats.cleaningPending', 'stats.cleaning', 'stats.cleaningRequests'], fallbackCleaningRequests),
+      otherRequests: pickStat(data.suggestionsRaw, ['stats.otherPending', 'stats.other', 'stats.otherRequests'], fallbackOtherRequests),
 
       unreadNotifications: pickStat(data.notificationsRaw, ['stats.unread', 'stats.unreadCount', 'unread'], fallbackUnreadNotifications),
       requestItemsCount: pickStat(data.requestsRaw, ['stats.items', 'stats.requestItems', 'stats.totalItems'], countRequestItems(requests)),
@@ -729,10 +742,10 @@ function UnifiedDashboard() {
 
   const servicesData = useMemo(
     () => [
-      { name: 'صيانة', value: metrics.openMaintenance },
-      { name: 'شراء مباشر', value: metrics.openPurchases },
-      { name: 'نظافة', value: metrics.cleaningRequests },
-      { name: 'طلبات أخرى', value: metrics.otherRequests },
+      { name: 'صيانة', value: metrics.maintenancePending },
+      { name: 'شراء مباشر', value: metrics.purchasePending },
+      { name: 'نظافة', value: metrics.cleaningPending },
+      { name: 'طلبات أخرى', value: metrics.otherPending },
     ],
     [metrics]
   );
