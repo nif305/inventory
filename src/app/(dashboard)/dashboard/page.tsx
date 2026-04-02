@@ -38,7 +38,7 @@ function normalizeRole(role?: string | null) {
 
 function isOpenStatus(value: any) {
   const s = String(value || '').toUpperCase();
-  return ['PENDING', 'OPEN', 'NEW', 'IN_PROGRESS', 'ACTIVE', 'RETURN_REQUESTED'].includes(s);
+  return ['PENDING', 'OPEN', 'NEW', 'IN_PROGRESS', 'ACTIVE', 'RETURN_REQUESTED', 'APPROVED', 'ORDERED', 'UNDER_REVIEW'].includes(s);
 }
 
 function formatNumber(value: number) {
@@ -343,9 +343,9 @@ function ManagerDashboard(props: any) {
   const { metrics, inventoryStatusData, requestFlowData, servicesData, latestUpdates, loading } = props;
   const actions = [
     { title: 'طلبات صرف بانتظار التنفيذ', count: metrics.pendingRequests, hint: 'طلبات مواد تحتاج تدخلًا مباشرًا', href: '/requests', critical: metrics.pendingRequests > 0 },
-    { title: 'طلبات صيانة بانتظار الاعتماد', count: metrics.maintenancePending, hint: 'طلبات خدمية تحتاج قرار المدير', href: '/suggestions?type=MAINTENANCE', critical: metrics.maintenancePending > 0 },
-    { title: 'طلبات نظافة بانتظار الاعتماد', count: metrics.cleaningPending, hint: 'طلبات نظافة تحتاج قرار المدير', href: '/suggestions?type=CLEANING', critical: metrics.cleaningPending > 0 },
-    { title: 'طلبات شراء مباشر بانتظار الاعتماد', count: metrics.purchasePending, hint: 'طلبات شراء تحتاج قرار المدير', href: '/suggestions?type=PURCHASE', critical: metrics.purchasePending > 0 },
+    { title: 'طلبات صيانة مفتوحة', count: metrics.maintenancePending + metrics.openMaintenanceExecution, hint: 'بانتظار اعتماد أو متابعة تنفيذية', href: '/suggestions?type=MAINTENANCE', critical: metrics.maintenancePending + metrics.openMaintenanceExecution > 0 },
+    { title: 'طلبات نظافة مفتوحة', count: metrics.cleaningPending + metrics.openCleaningExecution, hint: 'بانتظار اعتماد أو متابعة تنفيذية', href: '/suggestions?type=CLEANING', critical: metrics.cleaningPending + metrics.openCleaningExecution > 0 },
+    { title: 'طلبات شراء مباشر مفتوحة', count: metrics.purchasePending + metrics.openPurchases, hint: 'بانتظار اعتماد أو استكمال الإجراء', href: '/suggestions?type=PURCHASE', critical: metrics.purchasePending + metrics.openPurchases > 0 },
     { title: 'طلبات أخرى بانتظار الاعتماد', count: metrics.otherPending, hint: 'طلبات أخرى تحتاج قرار المدير', href: '/suggestions?type=OTHER', critical: metrics.otherPending > 0 },
     { title: 'مواد منخفضة أو نافدة', count: metrics.lowStock + metrics.outOfStock, hint: 'تحتاج قرارًا على المخزون أو التوريد', href: '/inventory', critical: metrics.outOfStock > 0 },
   ];
@@ -380,9 +380,9 @@ function ManagerDashboard(props: any) {
             <ClickableStatCard href="/inventory?status=LOW_STOCK" title="مواد منخفضة" value={metrics.lowStock} note="تحتاج متابعة قريبة" tone="gold" />
             <ClickableStatCard href="/inventory?status=OUT_OF_STOCK" title="مواد نافدة" value={metrics.outOfStock} note="تؤثر على الجاهزية" tone="danger" />
             <ClickableStatCard href="/custody?filter=late" title="عهد متأخرة" value={metrics.delayedCustody} note="مواد تجاوزت الموعد المحدد" tone="default" />
-            <ClickableStatCard href="/suggestions?type=MAINTENANCE" title="طلبات صيانة" value={metrics.maintenancePending} note="بانتظار اعتماد المدير" tone="danger" />
-            <ClickableStatCard href="/suggestions?type=CLEANING" title="طلبات نظافة" value={metrics.cleaningPending} note="بانتظار اعتماد المدير" tone="primary" />
-            <ClickableStatCard href="/suggestions?type=PURCHASE" title="طلبات شراء مباشر" value={metrics.purchasePending} note="بانتظار اعتماد المدير" tone="gold" />
+            <ClickableStatCard href="/suggestions?type=MAINTENANCE" title="طلبات صيانة" value={metrics.maintenancePending + metrics.openMaintenanceExecution} note="بانتظار اعتماد أو متابعة تنفيذية" tone="danger" />
+            <ClickableStatCard href="/suggestions?type=CLEANING" title="طلبات نظافة" value={metrics.cleaningPending + metrics.openCleaningExecution} note="بانتظار اعتماد أو متابعة تنفيذية" tone="primary" />
+            <ClickableStatCard href="/suggestions?type=PURCHASE" title="طلبات شراء مباشر" value={metrics.purchasePending + metrics.openPurchases} note="بانتظار اعتماد أو استكمال الإجراء" tone="gold" />
           </div>
         </div>
       </Hero>
@@ -399,7 +399,7 @@ function ManagerDashboard(props: any) {
             {links.map((link) => <QuickAction key={link.href} href={link.href} label={link.label} />)}
           </div>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <ClickableStatCard href="/suggestions" title="الخدمات المفتوحة" value={metrics.maintenancePending + metrics.cleaningPending + metrics.purchasePending + metrics.otherPending} note="صيانة وشراء ونظافة وطلبات أخرى" tone="default" />
+            <ClickableStatCard href="/suggestions" title="الخدمات المفتوحة" value={metrics.maintenancePending + metrics.openMaintenanceExecution + metrics.cleaningPending + metrics.openCleaningExecution + metrics.purchasePending + metrics.openPurchases + metrics.otherPending} note="صيانة وشراء ونظافة وطلبات أخرى" tone="default" />
             <StatCard title="بنود الطلبات" value={metrics.requestItemsCount} note="إجمالي البنود المسجلة" tone="primary" />
           </div>
         </SectionCard>
@@ -672,11 +672,17 @@ function UnifiedDashboard() {
 
     const fallbackOpenMaintenance = maintenance.filter((item) => isOpenStatus(item.status)).length;
     const fallbackOpenPurchases = purchases.filter((item) => isOpenStatus(item.status)).length;
+    const fallbackOpenMaintenanceExecution = maintenance.filter(
+      (item) => String(item.category || '').toUpperCase() !== 'CLEANING' && isOpenStatus(item.status)
+    ).length;
+    const fallbackOpenCleaningExecution = maintenance.filter(
+      (item) => String(item.category || '').toUpperCase() === 'CLEANING' && isOpenStatus(item.status)
+    ).length;
     const fallbackCleaningRequests = suggestions.filter(
       (item) => String(item.category || '').toUpperCase() === 'CLEANING' && isOpenStatus(item.status)
     ).length;
     const fallbackOtherRequests = suggestions.filter(
-      (item) => String(item.category || '').toUpperCase() !== 'CLEANING' && isOpenStatus(item.status)
+      (item) => String(item.category || '').toUpperCase() === 'OTHER' && isOpenStatus(item.status)
     ).length;
 
     const fallbackUnreadNotifications = notifications.filter((item) => !item.isRead).length;
@@ -700,6 +706,8 @@ function UnifiedDashboard() {
 
       openMaintenance: pickStat(data.maintenanceRaw, ['stats.open', 'stats.pending', 'stats.active'], fallbackOpenMaintenance),
       openPurchases: pickStat(data.purchasesRaw, ['stats.open', 'stats.pending', 'stats.active'], fallbackOpenPurchases),
+      openMaintenanceExecution: fallbackOpenMaintenanceExecution,
+      openCleaningExecution: fallbackOpenCleaningExecution,
       cleaningRequests: pickStat(data.suggestionsRaw, ['stats.cleaning', 'stats.cleaningRequests'], fallbackCleaningRequests),
       otherRequests: pickStat(data.suggestionsRaw, ['stats.other', 'stats.otherRequests'], fallbackOtherRequests),
 
@@ -734,9 +742,9 @@ function UnifiedDashboard() {
 
   const servicesData = useMemo(
     () => [
-      { name: 'صيانة', value: metrics.maintenancePending },
-      { name: 'شراء مباشر', value: metrics.purchasePending },
-      { name: 'نظافة', value: metrics.cleaningPending },
+      { name: 'صيانة', value: metrics.maintenancePending + metrics.openMaintenanceExecution },
+      { name: 'شراء مباشر', value: metrics.purchasePending + metrics.openPurchases },
+      { name: 'نظافة', value: metrics.cleaningPending + metrics.openCleaningExecution },
       { name: 'طلبات أخرى', value: metrics.otherPending },
     ],
     [metrics]

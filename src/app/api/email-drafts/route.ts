@@ -1,76 +1,102 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { Role, Status } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 
-function sanitizeHeader(value?: string | null) {
-  return String(value || '').replace(/[\r\n]+/g, ' ').trim();
+function mapRole(role: string): Role {
+  const normalized = String(role || '').trim().toLowerCase();
+  if (normalized === 'manager') return Role.MANAGER;
+  if (normalized === 'warehouse') return Role.WAREHOUSE;
+  return Role.USER;
 }
 
-function stripHtmlToText(html?: string | null) {
-  return String(html || '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/tr>/gi, '\n')
-    .replace(/<\/p>/gi, '\n')
-    .replace(/<\/div>/gi, '\n')
-    .replace(/<li>/gi, '• ')
-    .replace(/<\/li>/gi, '\n')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/\n{3,}/g, '\n\n')
-    .replace(/[ \t]{2,}/g, ' ')
-    .trim();
-}
+async function resolveSessionUser(request: NextRequest) {
+  const cookieId = decodeURIComponent(request.cookies.get('user_id')?.value || '').trim();
+  const cookieEmail = decodeURIComponent(request.cookies.get('user_email')?.value || '').trim();
+  const cookieEmployeeId = decodeURIComponent(request.cookies.get('user_employee_id')?.value || '').trim();
+  const activeRoleRaw = decodeURIComponent(
+    request.headers.get('x-active-role') ||
+      request.cookies.get('server_active_role')?.value ||
+      request.cookies.get('active_role')?.value ||
+      request.cookies.get('user_role')?.value ||
+      'user'
+  ).trim();
 
-export async function GET(
-  _request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const { id } = await params;
+  const activeRole = mapRole(activeRoleRaw);
 
-    const draft = await prisma.emailDraft.findUnique({
-      where: { id },
+  let user = null;
+
+  if (cookieId) {
+    user = await prisma.user.findUnique({
+      where: { id: cookieId },
+      select: { id: true, roles: true, status: true },
     });
+  }
 
-    if (!draft) {
-      return NextResponse.json({ error: 'المسودة غير موجودة' }, { status: 404 });
+  if (!user && cookieEmail) {
+    user = await prisma.user.findFirst({
+      where: { email: { equals: cookieEmail, mode: 'insensitive' } },
+      select: { id: true, roles: true, status: true },
+    });
+  }
+
+  if (!user && cookieEmployeeId) {
+    user = await prisma.user.findUnique({
+      where: { employeeId: cookieEmployeeId },
+      select: { id: true, roles: true, status: true },
+    });
+  }
+
+  if (!user) {
+    throw new Error('تعذر التحقق من المستخدم الحالي. أعد تسجيل الدخول ثم حاول مرة أخرى.');
+  }
+
+  if (user.status !== Status.ACTIVE) {
+    throw new Error('الحساب غير نشط.');
+  }
+
+  if (!Array.isArray(user.roles) || !user.roles.includes(activeRole)) {
+    throw new Error('الدور النشط غير صالح لهذا المستخدم.');
+  }
+
+  return { ...user, role: activeRole };
+}
+
+export async function GET(request: NextRequest) {
+  try {
+    const sessionUser = await resolveSessionUser(request);
+
+    if (sessionUser.role !== Role.MANAGER) {
+      return NextResponse.json({ error: 'غير مصرح' }, { status: 403 });
     }
 
-    const subject = sanitizeHeader(draft.subject || 'مسودة مراسلة');
-    const to = sanitizeHeader(draft.recipient || '');
-    const htmlBody = String(draft.body || '');
-    const textBody = stripHtmlToText(htmlBody);
+    const drafts = await prisma.emailDraft.findMany({
+      orderBy: { createdAt: 'desc' },
+    });
 
-    const eml = [
-      `To: ${to}`,
-      'MIME-Version: 1.0',
-      `Subject: ${subject}`,
-      'Content-Type: text/html; charset=UTF-8',
-      'Content-Transfer-Encoding: 8bit',
-      '',
-      htmlBody || textBody,
-      '',
-    ].join('\r\n');
+    const rows = drafts.map((draft) => ({
+      id: draft.id,
+      sourceType: draft.sourceType,
+      sourceId: draft.sourceId,
+      subject: draft.subject,
+      to: draft.recipient,
+      cc: null,
+      body: draft.body,
+      status: draft.status === 'COPIED' ? 'READY' : draft.status,
+      createdAt: draft.createdAt,
+      updatedAt: draft.createdAt,
+      createdBy: null,
+    }));
 
-    const filename = `${subject || 'email-draft'}.eml`
-      .replace(/[\\/:*?"<>|]+/g, '-')
-      .slice(0, 120);
-
-    return new NextResponse(eml, {
-      status: 200,
-      headers: {
-        'Content-Type': 'message/rfc822; charset=utf-8',
-        'Content-Disposition': `attachment; filename="${filename}"`,
+    return NextResponse.json({
+      data: rows,
+      stats: {
+        total: rows.length,
+        drafts: rows.filter((row) => row.status === 'DRAFT').length,
+        ready: rows.filter((row) => row.status === 'READY').length,
+        sent: rows.filter((row) => row.status === 'SENT').length,
       },
     });
   } catch (error: any) {
-    return NextResponse.json(
-      { error: error?.message || 'تعذر تصدير ملف EML' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: error?.message || 'تعذر جلب المراسلات الخارجية' }, { status: 500 });
   }
 }

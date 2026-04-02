@@ -135,21 +135,21 @@ async function generateLinkedCode(category: SuggestionCategory) {
   for (const row of suggestionRows) {
     const parsed = parseJsonObject(row.adminNotes);
     const code = String(parsed.linkedCode || '');
-    const match = code.match(new RegExp(`^${prefix}-${year}-(\d{4})$`));
+    const match = code.match(new RegExp(`^${prefix}-${year}-(\\d{4})$`));
     if (match) maxSerial = Math.max(maxSerial, Number(match[1]));
   }
 
   const maintenanceRows = await prisma.maintenanceRequest.findMany({ select: { code: true } });
   for (const row of maintenanceRows) {
     const code = String(row.code || '');
-    const match = code.match(new RegExp(`^${prefix}-${year}-(\d{4})$`));
+    const match = code.match(new RegExp(`^${prefix}-${year}-(\\d{4})$`));
     if (match) maxSerial = Math.max(maxSerial, Number(match[1]));
   }
 
   const purchaseRows = await prisma.purchaseRequest.findMany({ select: { code: true } });
   for (const row of purchaseRows) {
     const code = String(row.code || '');
-    const match = code.match(new RegExp(`^${prefix}-${year}-(\d{4})$`));
+    const match = code.match(new RegExp(`^${prefix}-${year}-(\\d{4})$`));
     if (match) maxSerial = Math.max(maxSerial, Number(match[1]));
   }
 
@@ -164,6 +164,10 @@ function buildRecipients(category: SuggestionCategory, provided?: string | null)
 
 function buildNotificationTitle(category: SuggestionCategory) {
   return `${categoryMeta(category).notification} جديد`;
+}
+
+function isAlreadyFinalSuggestionStatus(status: SuggestionStatus) {
+  return status === SuggestionStatus.APPROVED || status === SuggestionStatus.REJECTED || status === SuggestionStatus.IMPLEMENTED;
 }
 
 function buildExternalEmailHtml(params: {
@@ -407,6 +411,10 @@ export async function PATCH(request: NextRequest) {
     const externalRecipient = String(justificationData.externalRecipient || '').trim();
 
     if (action === 'reject') {
+      if (suggestion.status === SuggestionStatus.REJECTED) {
+        return NextResponse.json({ data: { ...suggestion, code: publicCode } });
+      }
+
       const updated = await prisma.suggestion.update({
         where: { id: suggestionId },
         data: {
@@ -436,193 +444,229 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: 'الإجراء غير صالح' }, { status: 400 });
     }
 
-    let linkedEntityType = String(adminData.linkedEntityType || '');
-    let linkedEntityId = String(adminData.linkedEntityId || '');
-    let linkedCode = String(adminData.linkedCode || '');
-
-    if (category === 'MAINTENANCE' || category === 'CLEANING') {
-      if (linkedEntityId) {
-        const existing = await prisma.maintenanceRequest.findUnique({ where: { id: linkedEntityId } });
-        if (!existing) linkedEntityId = '';
-        else {
-          linkedEntityType = 'MaintenanceRequest';
-          linkedCode = existing.code || linkedCode;
-        }
-      }
-
-      if (!linkedEntityId && linkedCode) {
-        const existing = await prisma.maintenanceRequest.findFirst({ where: { code: linkedCode } });
-        if (existing) {
-          linkedEntityId = existing.id;
-          linkedEntityType = 'MaintenanceRequest';
-          linkedCode = existing.code || linkedCode;
-        }
-      }
-
-      if (!linkedEntityId) {
-        linkedCode = linkedCode || await generateLinkedCode(category);
-        try {
-          const maintenance = await prisma.maintenanceRequest.create({
-            data: {
-              code: linkedCode,
-              requesterId: suggestion.requesterId,
-              category: category === 'CLEANING' ? 'CLEANING' : 'TECHNICAL',
-              description: suggestion.description,
-              priority: suggestion.priority,
-              status: MaintenanceStatus.APPROVED,
-              notes: adminNotes || null,
-            },
-          });
-          linkedEntityType = 'MaintenanceRequest';
-          linkedEntityId = maintenance.id;
-          linkedCode = maintenance.code;
-        } catch (error: any) {
-          const duplicate = await prisma.maintenanceRequest.findFirst({ where: { code: linkedCode } });
-          if (!duplicate) throw error;
-          linkedEntityType = 'MaintenanceRequest';
-          linkedEntityId = duplicate.id;
-          linkedCode = duplicate.code;
-        }
-      }
-    } else if (category === 'PURCHASE') {
-      if (linkedEntityId) {
-        const existing = await prisma.purchaseRequest.findUnique({ where: { id: linkedEntityId } });
-        if (!existing) linkedEntityId = '';
-        else {
-          linkedEntityType = 'PurchaseRequest';
-          linkedCode = existing.code || linkedCode;
-        }
-      }
-
-      if (!linkedEntityId && linkedCode) {
-        const existing = await prisma.purchaseRequest.findFirst({ where: { code: linkedCode } });
-        if (existing) {
-          linkedEntityId = existing.id;
-          linkedEntityType = 'PurchaseRequest';
-          linkedCode = existing.code || linkedCode;
-        }
-      }
-
-      if (!linkedEntityId) {
-        linkedCode = linkedCode || await generateLinkedCode(category);
-        try {
-          const purchase = await prisma.purchaseRequest.create({
-            data: {
-              code: linkedCode,
-              requesterId: suggestion.requesterId,
-              items: itemName || suggestion.title,
-              reason: suggestion.description,
-              budgetNote: adminNotes || null,
-              estimatedValue: null,
-              targetDepartment,
-              status: PurchaseStatus.APPROVED,
-            },
-          });
-          linkedEntityType = 'PurchaseRequest';
-          linkedEntityId = purchase.id;
-          linkedCode = purchase.code;
-        } catch (error: any) {
-          const duplicate = await prisma.purchaseRequest.findFirst({ where: { code: linkedCode } });
-          if (!duplicate) throw error;
-          linkedEntityType = 'PurchaseRequest';
-          linkedEntityId = duplicate.id;
-          linkedCode = duplicate.code;
-        }
-      }
-    } else {
-      linkedEntityType = 'Suggestion';
-      linkedEntityId = suggestionId;
-      linkedCode = linkedCode || await generateLinkedCode(category);
-    }
-
     const recipient = buildRecipients(category, externalRecipient);
     const recipientLabel = category === 'PURCHASE' ? 'سعادة الأستاذ نواف المحارب سلمه الله' : 'سعادة مدير الإدارة المختصة سلمه الله';
 
-    let linkedDraftId = String(adminData.linkedDraftId || '');
-    let draft = null as any;
+    const result = await prisma.$transaction(async (tx) => {
+      const freshSuggestion = await tx.suggestion.findUnique({ where: { id: suggestionId } });
+      if (!freshSuggestion) {
+        throw new Error('الطلب غير موجود');
+      }
 
-    if (linkedDraftId) {
-      draft = await prisma.emailDraft.findUnique({ where: { id: linkedDraftId } });
-    }
+      const freshAdminData = parseJsonObject(freshSuggestion.adminNotes);
+      const freshJustificationData = parseJsonObject(freshSuggestion.justification);
 
-    if (!draft) {
-      draft = await prisma.emailDraft.findFirst({
-        where: {
-          sourceType: category.toLowerCase(),
-          sourceId: linkedEntityId || suggestion.id,
-        },
+      if (freshSuggestion.status === SuggestionStatus.APPROVED && freshAdminData.linkedDraftId) {
+        const existingDraft = await tx.emailDraft.findUnique({ where: { id: String(freshAdminData.linkedDraftId) } });
+        return {
+          updatedSuggestion: freshSuggestion,
+          linkedEntityType: String(freshAdminData.linkedEntityType || ''),
+          linkedEntityId: String(freshAdminData.linkedEntityId || ''),
+          linkedCode: String(freshAdminData.linkedCode || freshAdminData.publicCode || publicCode),
+          draft: existingDraft,
+        };
+      }
+
+      let linkedEntityType = String(freshAdminData.linkedEntityType || '');
+      let linkedEntityId = String(freshAdminData.linkedEntityId || '');
+      let linkedCode = String(freshAdminData.linkedCode || '');
+
+      if (category === 'MAINTENANCE' || category === 'CLEANING') {
+        if (linkedEntityId) {
+          const existing = await tx.maintenanceRequest.findUnique({ where: { id: linkedEntityId } });
+          if (!existing) linkedEntityId = '';
+          else {
+            linkedEntityType = 'MaintenanceRequest';
+            linkedCode = existing.code || linkedCode;
+          }
+        }
+
+        if (!linkedEntityId && linkedCode) {
+          const existing = await tx.maintenanceRequest.findFirst({ where: { code: linkedCode } });
+          if (existing) {
+            linkedEntityId = existing.id;
+            linkedEntityType = 'MaintenanceRequest';
+            linkedCode = existing.code || linkedCode;
+          }
+        }
+
+        if (!linkedEntityId) {
+          linkedCode = linkedCode || await generateLinkedCode(category);
+          try {
+            const maintenance = await tx.maintenanceRequest.create({
+              data: {
+                code: linkedCode,
+                requesterId: freshSuggestion.requesterId,
+                category: category === 'CLEANING' ? 'CLEANING' : 'TECHNICAL',
+                description: freshSuggestion.description,
+                priority: freshSuggestion.priority,
+                status: MaintenanceStatus.APPROVED,
+                notes: adminNotes || null,
+              },
+            });
+            linkedEntityType = 'MaintenanceRequest';
+            linkedEntityId = maintenance.id;
+            linkedCode = maintenance.code;
+          } catch (error: any) {
+            const duplicate = await tx.maintenanceRequest.findFirst({ where: { code: linkedCode } });
+            if (!duplicate) throw error;
+            linkedEntityType = 'MaintenanceRequest';
+            linkedEntityId = duplicate.id;
+            linkedCode = duplicate.code;
+          }
+        }
+      } else if (category === 'PURCHASE') {
+        if (linkedEntityId) {
+          const existing = await tx.purchaseRequest.findUnique({ where: { id: linkedEntityId } });
+          if (!existing) linkedEntityId = '';
+          else {
+            linkedEntityType = 'PurchaseRequest';
+            linkedCode = existing.code || linkedCode;
+          }
+        }
+
+        if (!linkedEntityId && linkedCode) {
+          const existing = await tx.purchaseRequest.findFirst({ where: { code: linkedCode } });
+          if (existing) {
+            linkedEntityId = existing.id;
+            linkedEntityType = 'PurchaseRequest';
+            linkedCode = existing.code || linkedCode;
+          }
+        }
+
+        if (!linkedEntityId) {
+          linkedCode = linkedCode || await generateLinkedCode(category);
+          try {
+            const purchase = await tx.purchaseRequest.create({
+              data: {
+                code: linkedCode,
+                requesterId: freshSuggestion.requesterId,
+                items: itemName || freshSuggestion.title,
+                reason: freshSuggestion.description,
+                budgetNote: adminNotes || null,
+                estimatedValue: null,
+                targetDepartment,
+                status: PurchaseStatus.APPROVED,
+              },
+            });
+            linkedEntityType = 'PurchaseRequest';
+            linkedEntityId = purchase.id;
+            linkedCode = purchase.code;
+          } catch (error: any) {
+            const duplicate = await tx.purchaseRequest.findFirst({ where: { code: linkedCode } });
+            if (!duplicate) throw error;
+            linkedEntityType = 'PurchaseRequest';
+            linkedEntityId = duplicate.id;
+            linkedCode = duplicate.code;
+          }
+        }
+      } else {
+        linkedEntityType = 'Suggestion';
+        linkedEntityId = suggestionId;
+        linkedCode = linkedCode || await generateLinkedCode(category);
+      }
+
+      let draft = null as any;
+      const linkedDraftId = String(freshAdminData.linkedDraftId || '');
+
+      if (linkedDraftId) {
+        draft = await tx.emailDraft.findUnique({ where: { id: linkedDraftId } });
+      }
+
+      if (!draft) {
+        draft = await tx.emailDraft.findFirst({
+          where: {
+            sourceType: category.toLowerCase(),
+            sourceId: { in: [...new Set([linkedEntityId, freshSuggestion.id].filter(Boolean))] },
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+      }
+
+      const draftBody = buildExternalEmailHtml({
+        recipientLabel,
+        introLine: '',
+        requestCode: linkedCode,
+        requestTitle: freshSuggestion.title,
+        createdAt: freshSuggestion.createdAt,
+        requesterName: requester?.fullName || '—',
+        requesterDepartment: requester?.department || '—',
+        requesterEmail: requester?.email || '—',
+        location,
+        quantity,
+        itemName,
+        description: freshSuggestion.description,
+        justification: String(freshJustificationData.requestSource || ''),
+        adminNotes,
       });
-    }
 
-    const draftBody = buildExternalEmailHtml({
-      recipientLabel,
-      requestCode: linkedCode,
-      requestTitle: suggestion.title,
-      createdAt: suggestion.createdAt,
-      requesterName: requester?.fullName || '—',
-      requesterDepartment: requester?.department || '—',
-      requesterEmail: requester?.email || '—',
-      location,
-      quantity,
-      itemName,
-      description: suggestion.description,
-      adminNotes,
-    });
+      if (draft) {
+        draft = await tx.emailDraft.update({
+          where: { id: draft.id },
+          data: {
+            sourceType: category.toLowerCase(),
+            sourceId: linkedEntityId || freshSuggestion.id,
+            recipient,
+            subject: `${freshSuggestion.title} - ${linkedCode}`,
+            body: draftBody,
+            status: 'DRAFT',
+          },
+        });
+      } else {
+        draft = await tx.emailDraft.create({
+          data: {
+            sourceType: category.toLowerCase(),
+            sourceId: linkedEntityId || freshSuggestion.id,
+            recipient,
+            subject: `${freshSuggestion.title} - ${linkedCode}`,
+            body: draftBody,
+            status: 'DRAFT',
+          },
+        });
+      }
 
-    if (draft) {
-      draft = await prisma.emailDraft.update({
-        where: { id: draft.id },
+      const updatedSuggestion = await tx.suggestion.update({
+        where: { id: suggestionId },
         data: {
-          recipient,
-          subject: `${suggestion.title} - ${linkedCode}`,
-          body: draftBody,
-          status: 'DRAFT',
+          status: SuggestionStatus.APPROVED,
+          adminNotes: JSON.stringify({
+            ...freshAdminData,
+            adminNotes,
+            targetDepartment,
+            linkedEntityType,
+            linkedEntityId,
+            linkedCode,
+            linkedDraftId: draft.id,
+            publicCode,
+          }),
         },
       });
-    } else {
-      draft = await prisma.emailDraft.create({
-        data: {
-          sourceType: category.toLowerCase(),
-          sourceId: linkedEntityId || suggestion.id,
-          recipient,
-          subject: `${suggestion.title} - ${linkedCode}`,
-          body: draftBody,
-          status: 'DRAFT',
-        },
+
+      return {
+        updatedSuggestion,
+        linkedEntityType,
+        linkedEntityId,
+        linkedCode,
+        draft,
+      };
+    });
+
+    if (!isAlreadyFinalSuggestionStatus(suggestion.status) || suggestion.status !== SuggestionStatus.APPROVED) {
+      await notifyRequesterAboutSuggestion({
+        requesterId: suggestion.requesterId,
+        suggestionId,
+        category,
+        title: suggestion.title,
+        action: 'APPROVED',
       });
     }
-
-    const updated = await prisma.suggestion.update({
-      where: { id: suggestionId },
-      data: {
-        status: SuggestionStatus.APPROVED,
-        adminNotes: JSON.stringify({
-          ...adminData,
-          adminNotes,
-          targetDepartment,
-          linkedEntityType,
-          linkedEntityId,
-          linkedCode,
-          linkedDraftId: draft.id,
-          publicCode,
-        }),
-      },
-    });
-
-    await notifyRequesterAboutSuggestion({
-      requesterId: suggestion.requesterId,
-      suggestionId,
-      category,
-      title: suggestion.title,
-      action: 'APPROVED',
-    });
 
     return NextResponse.json({
-      data: { ...updated, code: publicCode },
-      linkedEntityType,
-      linkedEntityId,
-      linkedCode,
-      linkedDraftId: draft.id,
+      data: { ...result.updatedSuggestion, code: publicCode },
+      linkedEntityType: result.linkedEntityType,
+      linkedEntityId: result.linkedEntityId,
+      linkedCode: result.linkedCode,
+      linkedDraftId: result.draft?.id || null,
     });
   } catch (error: any) {
     return NextResponse.json({ error: error.message || 'تعذر معالجة الطلب' }, { status: 400 });
