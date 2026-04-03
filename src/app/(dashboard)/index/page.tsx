@@ -7,26 +7,46 @@ import { useAuth } from '@/context/AuthContext';
 type GenericItem = Record<string, any>;
 type ApiPayload = Record<string, any> | GenericItem[] | null;
 
-type DashboardData = {
-  inventoryRaw: ApiPayload;
-  requestsRaw: ApiPayload;
-  returnsRaw: ApiPayload;
-  custodyRaw: ApiPayload;
-  maintenanceRaw: ApiPayload;
-  purchasesRaw: ApiPayload;
-  suggestionsRaw: ApiPayload;
-  notificationsRaw: ApiPayload;
+type DashboardMetrics = {
+  totalInventory: number;
+  lowStock: number;
+  outOfStock: number;
+  availableInventory: number;
+  returnableItems: number;
+  consumableItems: number;
+  pendingRequests: number;
+  issuedRequests: number;
+  rejectedRequests: number;
+  pendingReturns: number;
+  activeCustody: number;
+  delayedCustody: number;
+  maintenancePending: number;
+  cleaningPending: number;
+  purchasePending: number;
+  otherPending: number;
+  unreadNotifications: number;
+  requestItemsCount: number;
 };
 
-const EMPTY_DATA: DashboardData = {
-  inventoryRaw: null,
-  requestsRaw: null,
-  returnsRaw: null,
-  custodyRaw: null,
-  maintenanceRaw: null,
-  purchasesRaw: null,
-  suggestionsRaw: null,
-  notificationsRaw: null,
+const EMPTY_METRICS: DashboardMetrics = {
+  totalInventory: 0,
+  lowStock: 0,
+  outOfStock: 0,
+  availableInventory: 0,
+  returnableItems: 0,
+  consumableItems: 0,
+  pendingRequests: 0,
+  issuedRequests: 0,
+  rejectedRequests: 0,
+  pendingReturns: 0,
+  activeCustody: 0,
+  delayedCustody: 0,
+  maintenancePending: 0,
+  cleaningPending: 0,
+  purchasePending: 0,
+  otherPending: 0,
+  unreadNotifications: 0,
+  requestItemsCount: 0,
 };
 
 function normalizeRole(role?: string | null) {
@@ -430,7 +450,7 @@ function WarehouseDashboard(props: any) {
     { href: '/returns', label: 'استلام الإرجاعات' },
     { href: '/custody', label: 'العهد' },
     { href: '/notifications', label: 'الإشعارات' },
-    { href: '/maintenance', label: 'الصيانة' },
+    { href: '/suggestions?type=MAINTENANCE', label: 'الصيانة' },
   ];
 
   return (
@@ -497,11 +517,9 @@ function UserDashboard(props: any) {
     { href: '/requests', label: 'طلب مواد' },
     { href: '/custody', label: 'عهدتي' },
     { href: '/returns', label: 'طلبات الإرجاع' },
-    { href: '/suggestions?type=MAINTENANCE&new=1', label: 'طلب صيانة' },
-    { href: '/suggestions?type=CLEANING&new=1', label: 'طلب نظافة' },
-    { href: '/suggestions?type=PURCHASE&new=1', label: 'شراء مباشر' },
-    { href: '/suggestions?type=OTHER&new=1', label: 'طلبات أخرى' },
+    { href: '/suggestions?type=MAINTENANCE&new=1', label: 'طلبات الصيانة' },
     { href: '/notifications', label: 'الإشعارات' },
+    { href: '/suggestions?type=PURCHASE&new=1', label: 'شراء مباشر' },
   ];
 
   return (
@@ -586,48 +604,32 @@ function DashboardSwitcher({
 function UnifiedDashboard() {
   const { user } = useAuth();
   const role = normalizeRole(user?.role);
-  const [data, setData] = useState<DashboardData>(EMPTY_DATA);
+  const [metrics, setMetrics] = useState<DashboardMetrics>(EMPTY_METRICS);
+  const [latestUpdates, setLatestUpdates] = useState<GenericItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let mounted = true;
 
-    const fetchJson = async (url: string) => {
-      try {
-        const res = await fetch(url, { credentials: 'include', cache: 'no-store' });
-        return await res.json().catch(() => ({}));
-      } catch {
-        return {};
-      }
-    };
-
     const load = async () => {
       setLoading(true);
-      const [inventoryRaw, requestsRaw, returnsRaw, custodyRaw, maintenanceRaw, purchasesRaw, suggestionsRaw, notificationsRaw] =
-        await Promise.all([
-          fetchJson('/api/inventory?limit=500'),
-          fetchJson('/api/requests?limit=500'),
-          fetchJson('/api/returns?limit=500'),
-          fetchJson('/api/custody?limit=500'),
-          fetchJson('/api/maintenance?limit=500'),
-          fetchJson('/api/purchases?limit=500'),
-          fetchJson('/api/suggestions?limit=500'),
-          fetchJson('/api/notifications?limit=200'),
-        ]);
-
-      if (!mounted) return;
-
-      setData({
-        inventoryRaw,
-        requestsRaw,
-        returnsRaw,
-        custodyRaw,
-        maintenanceRaw,
-        purchasesRaw,
-        suggestionsRaw,
-        notificationsRaw,
-      });
-      setLoading(false);
+      try {
+        const res = await fetch('/api/dashboard-summary', {
+          credentials: 'include',
+          cache: 'no-store',
+          headers: { 'x-active-role': role },
+        });
+        const json = await res.json().catch(() => ({}));
+        if (!mounted) return;
+        setMetrics({ ...EMPTY_METRICS, ...(json?.metrics || {}) });
+        setLatestUpdates(Array.isArray(json?.latestUpdates) ? json.latestUpdates : []);
+      } catch {
+        if (!mounted) return;
+        setMetrics(EMPTY_METRICS);
+        setLatestUpdates([]);
+      } finally {
+        if (mounted) setLoading(false);
+      }
     };
 
     load();
@@ -635,85 +637,6 @@ function UnifiedDashboard() {
       mounted = false;
     };
   }, [role]);
-
-  const metrics = useMemo(() => {
-    const inventory = getArrayPayload(data.inventoryRaw);
-    const requests = getArrayPayload(data.requestsRaw);
-    const returns = getArrayPayload(data.returnsRaw);
-    const custody = getArrayPayload(data.custodyRaw);
-    const maintenance = getArrayPayload(data.maintenanceRaw);
-    const purchases = getArrayPayload(data.purchasesRaw);
-    const suggestions = getArrayPayload(data.suggestionsRaw);
-    const notifications = getArrayPayload(data.notificationsRaw);
-
-    const fallbackLowStock = inventory.filter((item) => {
-      const qty = Number(item.availableQty ?? item.availableQuantity ?? item.qty ?? 0);
-      return qty > 0 && qty <= 5;
-    }).length;
-
-    const fallbackOutOfStock = inventory.filter((item) => {
-      const qty = Number(item.availableQty ?? item.availableQuantity ?? item.qty ?? 0);
-      return qty <= 0;
-    }).length;
-
-    const fallbackReturnableItems = inventory.filter((item) => String(item.type || '').toUpperCase() === 'RETURNABLE').length;
-    const fallbackConsumableItems = inventory.filter((item) => String(item.type || '').toUpperCase() === 'CONSUMABLE').length;
-
-    const fallbackPendingRequests = requests.filter((item) => String(item.status || '').toUpperCase() === 'PENDING').length;
-    const fallbackIssuedRequests = requests.filter((item) => String(item.status || '').toUpperCase() === 'ISSUED').length;
-    const fallbackRejectedRequests = requests.filter((item) => String(item.status || '').toUpperCase() === 'REJECTED').length;
-
-    const fallbackPendingReturns = returns.filter((item) => String(item.status || '').toUpperCase() === 'PENDING').length;
-
-    const fallbackActiveCustody = custody.filter((item) => String(item.status || '').toUpperCase() === 'ACTIVE').length;
-    const fallbackDelayedCustody = custody.filter((item) => {
-      const due = item.expectedReturn || item.dueDate;
-      if (!due) return false;
-      return new Date(due).getTime() < Date.now() && String(item.status || '').toUpperCase() !== 'RETURNED';
-    }).length;
-
-    const fallbackOpenMaintenance = maintenance.filter((item) => isOpenStatus(item.status)).length;
-    const fallbackOpenPurchases = purchases.filter((item) => isOpenStatus(item.status)).length;
-    const fallbackCleaningRequests = suggestions.filter(
-      (item) => String(item.category || '').toUpperCase() === 'CLEANING' && isOpenStatus(item.status)
-    ).length;
-    const fallbackOtherRequests = suggestions.filter(
-      (item) => String(item.category || '').toUpperCase() !== 'CLEANING' && isOpenStatus(item.status)
-    ).length;
-
-    const fallbackUnreadNotifications = notifications.filter((item) => !item.isRead).length;
-
-    return {
-      totalInventory: pickStat(data.inventoryRaw, ['stats.totalItems', 'stats.total', 'pagination.total', 'total', 'count'], inventory.length),
-      lowStock: pickStat(data.inventoryRaw, ['stats.lowStock', 'stats.lowStockCount', 'stats.lowStockItems', 'stats.low', 'lowStock'], fallbackLowStock),
-      outOfStock: pickStat(data.inventoryRaw, ['stats.outOfStock', 'stats.outOfStockCount', 'stats.outOfStockItems', 'stats.out', 'outOfStock'], fallbackOutOfStock),
-      availableInventory: pickStat(data.inventoryRaw, ['stats.available', 'stats.availableItems', 'stats.totalAvailable', 'stats.availableQty', 'available'], Math.max(inventory.length - fallbackOutOfStock, 0)),
-      returnableItems: pickStat(data.inventoryRaw, ['stats.returnable', 'stats.returnableItems', 'stats.returnableCount'], fallbackReturnableItems),
-      consumableItems: pickStat(data.inventoryRaw, ['stats.consumable', 'stats.consumableItems', 'stats.consumableCount'], fallbackConsumableItems),
-
-      pendingRequests: pickStat(data.requestsRaw, ['stats.pending', 'stats.pendingRequests', 'stats.new', 'stats.open'], fallbackPendingRequests),
-      issuedRequests: pickStat(data.requestsRaw, ['stats.issued', 'stats.issuedRequests', 'stats.dispatched'], fallbackIssuedRequests),
-      rejectedRequests: pickStat(data.requestsRaw, ['stats.rejected', 'stats.rejectedRequests'], fallbackRejectedRequests),
-
-      pendingReturns: pickStat(data.returnsRaw, ['stats.pending', 'stats.pendingReturns', 'stats.awaitingReceipt'], fallbackPendingReturns),
-
-      activeCustody: pickStat(data.custodyRaw, ['stats.active', 'stats.activeCustody', 'stats.open'], fallbackActiveCustody),
-      delayedCustody: pickStat(data.custodyRaw, ['stats.delayed', 'stats.overdue', 'stats.late'], fallbackDelayedCustody),
-
-      openMaintenance: pickStat(data.maintenanceRaw, ['stats.open', 'stats.pending', 'stats.active'], fallbackOpenMaintenance),
-      openPurchases: pickStat(data.purchasesRaw, ['stats.open', 'stats.pending', 'stats.active'], fallbackOpenPurchases),
-      cleaningRequests: pickStat(data.suggestionsRaw, ['stats.cleaning', 'stats.cleaningRequests'], fallbackCleaningRequests),
-      otherRequests: pickStat(data.suggestionsRaw, ['stats.other', 'stats.otherRequests'], fallbackOtherRequests),
-
-      maintenancePending: pickStat(data.suggestionsRaw, ['stats.maintenancePending', 'stats.maintenance', 'stats.maintenanceRequests'], suggestions.filter((item) => String(item.category || '').toUpperCase() === 'MAINTENANCE' && String(item.status || '').toUpperCase() === 'PENDING').length),
-      cleaningPending: pickStat(data.suggestionsRaw, ['stats.cleaningPending', 'stats.cleaning', 'stats.cleaningRequests'], suggestions.filter((item) => String(item.category || '').toUpperCase() === 'CLEANING' && String(item.status || '').toUpperCase() === 'PENDING').length),
-      purchasePending: pickStat(data.suggestionsRaw, ['stats.purchasePending', 'stats.purchase', 'stats.purchaseRequests'], suggestions.filter((item) => String(item.category || '').toUpperCase() === 'PURCHASE' && String(item.status || '').toUpperCase() === 'PENDING').length),
-      otherPending: pickStat(data.suggestionsRaw, ['stats.otherPending', 'stats.other', 'stats.otherRequests'], suggestions.filter((item) => String(item.category || '').toUpperCase() === 'OTHER' && String(item.status || '').toUpperCase() === 'PENDING').length),
-
-      unreadNotifications: pickStat(data.notificationsRaw, ['stats.unread', 'stats.unreadCount', 'unread'], fallbackUnreadNotifications),
-      requestItemsCount: pickStat(data.requestsRaw, ['stats.items', 'stats.requestItems', 'stats.totalItems'], countRequestItems(requests)),
-    };
-  }, [data]);
 
   const inventoryStatusData = useMemo(
     () => [
@@ -743,14 +666,6 @@ function UnifiedDashboard() {
     ],
     [metrics]
   );
-
-  const latestUpdates = useMemo(() => {
-    const notifications = getArrayPayload(data.notificationsRaw);
-    return notifications
-      .slice()
-      .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
-      .slice(0, 4);
-  }, [data.notificationsRaw]);
 
   return (
     <DashboardSwitcher

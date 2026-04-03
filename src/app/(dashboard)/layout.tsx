@@ -86,7 +86,7 @@ const managerWarehouseGroups: NavGroup[] = [
     title: 'الخدمات',
     items: [
       {
-        href: '/maintenance',
+        href: '/suggestions?type=MAINTENANCE',
         label: 'الصيانة',
         roles: ['manager'],
         icon: (
@@ -97,7 +97,7 @@ const managerWarehouseGroups: NavGroup[] = [
         ),
       },
       {
-        href: '/suggestions?category=CLEANING',
+        href: '/suggestions?type=CLEANING',
         label: 'النظافة',
         roles: ['manager'],
         icon: (
@@ -110,7 +110,7 @@ const managerWarehouseGroups: NavGroup[] = [
         ),
       },
       {
-        href: '/purchases',
+        href: '/suggestions?type=PURCHASE',
         label: 'الشراء المباشر',
         roles: ['manager'],
         icon: (
@@ -123,7 +123,7 @@ const managerWarehouseGroups: NavGroup[] = [
         ),
       },
       {
-        href: '/suggestions?category=OTHER',
+        href: '/suggestions?type=OTHER',
         label: 'الطلبات الأخرى',
         roles: ['manager'],
         icon: (
@@ -375,9 +375,17 @@ function isActive(pathname: string, href: string, searchCategory: string | null)
   }
 
   if (href.startsWith('/suggestions?type=')) {
-    const targetType = href.split('type=')[1]?.split('&')[0] || '';
+    const hrefQuery = href.split('?')[1] || '';
+    const hrefParams = new URLSearchParams(hrefQuery);
+    const targetType = hrefParams.get('type') || '';
+    const targetNew = hrefParams.get('new');
     const params = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-    return pathname === '/suggestions' && params?.get('type') === targetType && params?.get('new') === '1';
+    const currentType = params?.get('type') || '';
+    const currentNew = params?.get('new');
+
+    if (pathname !== '/suggestions' || currentType !== targetType) return false;
+    if (targetNew != null) return currentNew === targetNew;
+    return true;
   }
 
   return pathname === href || pathname.startsWith(`${href}/`);

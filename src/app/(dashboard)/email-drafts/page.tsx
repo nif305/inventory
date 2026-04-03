@@ -14,19 +14,20 @@ type EmailDraftRow = {
   to: string;
   cc?: string | null;
   body?: string | null;
-  status: 'DRAFT' | 'READY' | 'SENT' | 'ARCHIVED';
+  status: 'DRAFT' | 'COPIED' | 'SENT';
   createdAt?: string;
-  updatedAt?: string;
-  requestType?: string;
+  copiedAt?: string | null;
   requestCode?: string;
+  typeLabel?: string;
   requesterName?: string;
   requesterDepartment?: string;
   requesterEmail?: string;
+  requesterMobile?: string;
   requesterExtension?: string;
   location?: string;
   itemName?: string;
   description?: string;
-  snippet?: string;
+  attachmentLabels?: string[];
 };
 
 function formatDate(value?: string | null) {
@@ -57,9 +58,8 @@ function normalizeArabic(value: string) {
 
 function statusMeta(status: EmailDraftRow['status']) {
   if (status === 'DRAFT') return { label: 'مسودة', tone: 'bg-slate-100 text-slate-700' };
-  if (status === 'READY') return { label: 'جاهزة', tone: 'bg-[#d0b284]/15 text-[#8a6a28]' };
-  if (status === 'SENT') return { label: 'مرسلة', tone: 'bg-emerald-100 text-emerald-700' };
-  return { label: 'مؤرشفة', tone: 'bg-[#016564]/10 text-[#016564]' };
+  if (status === 'COPIED') return { label: 'تم التنزيل والأرشفة', tone: 'bg-[#016564]/10 text-[#016564]' };
+  return { label: 'مرسلة', tone: 'bg-emerald-100 text-emerald-700' };
 }
 
 export default function EmailDraftsPage() {
@@ -71,54 +71,56 @@ export default function EmailDraftsPage() {
 
   const isManager = user?.role === 'manager';
 
-  useEffect(() => {
-    let mounted = true;
-
-    async function fetchRows() {
-      setLoading(true);
-      try {
-        const res = await fetch('/api/email-drafts', { cache: 'no-store' });
-        const data = await res.json();
-        if (mounted) setRows(Array.isArray(data?.data) ? data.data : []);
-      } catch {
-        if (mounted) setRows([]);
-      } finally {
-        if (mounted) setLoading(false);
-      }
+  async function fetchRows() {
+    setLoading(true);
+    try {
+      const query = search.trim() ? `?q=${encodeURIComponent(search.trim())}` : '';
+      const res = await fetch(`/api/email-drafts${query}`, { cache: 'no-store' });
+      const data = await res.json();
+      setRows(Array.isArray(data?.data) ? data.data : []);
+    } catch {
+      setRows([]);
+    } finally {
+      setLoading(false);
     }
+  }
 
+  useEffect(() => {
     fetchRows();
-    return () => {
-      mounted = false;
-    };
   }, []);
 
   const filteredRows = useMemo(() => {
     const q = normalizeArabic(search);
     return rows.filter((row) => {
-      const haystack = normalizeArabic([
-        row.subject,
-        row.to,
-        row.cc,
-        row.requestType,
-        row.requestCode,
-        row.requesterName,
-        row.requesterDepartment,
-        row.requesterEmail,
-        row.location,
-        row.itemName,
-        row.description,
-      ].filter(Boolean).join(' '));
+      const haystack = normalizeArabic(
+        [
+          row.subject,
+          row.to,
+          row.requestCode,
+          row.typeLabel,
+          row.requesterName,
+          row.requesterDepartment,
+          row.requesterEmail,
+          row.location,
+          row.itemName,
+          row.description,
+          row.attachmentLabels?.join(' '),
+        ]
+          .filter(Boolean)
+          .join(' ')
+      );
       return q ? haystack.includes(q) : true;
     });
   }, [rows, search]);
 
-  const stats = useMemo(() => ({
-    total: rows.length,
-    drafts: rows.filter((row) => row.status === 'DRAFT').length,
-    ready: rows.filter((row) => row.status === 'READY').length,
-    sent: rows.filter((row) => row.status === 'SENT').length,
-  }), [rows]);
+  const stats = useMemo(() => {
+    return {
+      total: rows.length,
+      drafts: rows.filter((row) => row.status === 'DRAFT').length,
+      archived: rows.filter((row) => row.status === 'COPIED').length,
+      sent: rows.filter((row) => row.status === 'SENT').length,
+    };
+  }, [rows]);
 
   if (!isManager) {
     return <div className="rounded-[22px] border border-red-200 bg-red-50 p-6 text-center text-red-700 sm:rounded-[26px]">غير مصرح لك بالوصول لهذه الصفحة</div>;
@@ -129,24 +131,23 @@ export default function EmailDraftsPage() {
       <section className="rounded-[24px] border border-[#d6d7d4] bg-white px-4 py-4 shadow-sm sm:rounded-[28px] sm:px-5 sm:py-5">
         <div className="space-y-2">
           <h1 className="text-[24px] font-extrabold leading-[1.25] text-[#016564] sm:text-[30px]">المراسلات الخارجية</h1>
-          <p className="text-[13px] leading-7 text-[#61706f] sm:text-sm">استعراض المسودات الخارجية الجاهزة للتنزيل بصيغة البريد الإلكتروني الرسمي.</p>
+          <p className="text-[13px] leading-7 text-[#61706f] sm:text-sm">استعراض المسودات الخارجية الجاهزة للتنزيل بصيغة بريد قابلة للتعديل، مع أرشفة الطلب بعد تنزيل ملف .eml.</p>
         </div>
-
         <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
-          <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none"><div className="text-[12px] text-[#6f7b7a]">إجمالي العناصر</div><div className="mt-1 text-[22px] font-extrabold leading-none text-[#016564] sm:text-xl">{stats.total}</div></Card>
-          <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none"><div className="text-[12px] text-[#6f7b7a]">المسودات</div><div className="mt-1 text-[22px] font-extrabold leading-none text-slate-700 sm:text-xl">{stats.drafts}</div></Card>
-          <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none"><div className="text-[12px] text-[#6f7b7a]">الجاهزة</div><div className="mt-1 text-[22px] font-extrabold leading-none text-[#d0b284] sm:text-xl">{stats.ready}</div></Card>
-          <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none"><div className="text-[12px] text-[#6f7b7a]">المرسلة</div><div className="mt-1 text-[22px] font-extrabold leading-none text-[#498983] sm:text-xl">{stats.sent}</div></Card>
+          <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none sm:rounded-2xl"><div className="text-[12px] text-[#6f7b7a]">إجمالي العناصر</div><div className="mt-1 text-[22px] font-extrabold leading-none text-[#016564] sm:text-xl">{stats.total}</div></Card>
+          <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none sm:rounded-2xl"><div className="text-[12px] text-[#6f7b7a]">المسودات</div><div className="mt-1 text-[22px] font-extrabold leading-none text-slate-700 sm:text-xl">{stats.drafts}</div></Card>
+          <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none sm:rounded-2xl"><div className="text-[12px] text-[#6f7b7a]">المؤرشفة بعد التنزيل</div><div className="mt-1 text-[22px] font-extrabold leading-none text-[#016564] sm:text-xl">{stats.archived}</div></Card>
+          <Card className="rounded-[20px] border border-[#d6d7d4] p-3 shadow-none sm:rounded-2xl"><div className="text-[12px] text-[#6f7b7a]">المرسلة</div><div className="mt-1 text-[22px] font-extrabold leading-none text-[#498983] sm:text-xl">{stats.sent}</div></Card>
         </div>
       </section>
 
       <section className="rounded-[24px] border border-[#d6d7d4] bg-white p-4 shadow-sm sm:rounded-[28px] sm:p-5">
-        <Input label="بحث" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="الموضوع، المستلم، نوع الطلب، مقدم الطلب أو رقم الطلب" />
+        <Input label="بحث" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="الموضوع، رقم الطلب، مقدم الطلب، الموقع، أو نوع الطلب" />
       </section>
 
       <section className="space-y-3">
         {loading ? (
-          <div className="space-y-3">{[1, 2, 3].map((item) => <Skeleton key={item} className="h-36 w-full rounded-[24px] sm:rounded-3xl" />)}</div>
+          <div className="space-y-3">{[1, 2, 3].map((item) => <Skeleton key={item} className="h-28 w-full rounded-[24px] sm:rounded-3xl" />)}</div>
         ) : filteredRows.length === 0 ? (
           <Card className="rounded-[24px] border border-[#d6d7d4] p-8 text-center text-sm text-[#61706f] shadow-sm sm:rounded-[28px]">لا توجد مراسلات مطابقة</Card>
         ) : (
@@ -158,23 +159,21 @@ export default function EmailDraftsPage() {
                   <div className="min-w-0 space-y-3">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className={`rounded-full px-3 py-1 text-[11px] leading-none ${status.tone}`}>{status.label}</span>
-                      <span className="rounded-full bg-[#016564]/8 px-3 py-1 text-[11px] text-[#016564]">{row.requestType || '—'}</span>
+                      <span className="rounded-full bg-[#d0b284]/15 px-3 py-1 text-[11px] leading-none text-[#8a6a28]">{row.typeLabel || '—'}</span>
                       <span className="font-mono text-sm font-bold text-[#016564]">{row.requestCode || '—'}</span>
                     </div>
-
                     <div className="break-words text-[15px] font-bold leading-7 text-[#152625] sm:text-base">{row.subject}</div>
-                    <div className="break-words text-sm leading-7 text-[#304342]">{row.snippet || row.description || '—'}</div>
-
-                    <div className="grid gap-2 text-[12px] text-[#61706f] sm:grid-cols-2 xl:grid-cols-3 sm:text-xs">
+                    <div className="grid gap-2 text-[12px] text-[#61706f] sm:grid-cols-2 lg:grid-cols-3 sm:text-xs">
+                      <div>مقدم الطلب: {row.requesterName || '—'}</div>
+                      <div>الإدارة: {row.requesterDepartment || '—'}</div>
+                      <div>الموقع: {row.location || '—'}</div>
+                      <div>العنصر المطلوب: {row.itemName || '—'}</div>
                       <div className="break-all">إلى: {row.to || '—'}</div>
-                      <div className="break-words">مقدم الطلب: {row.requesterName || '—'}</div>
-                      <div className="break-words">الإدارة: {row.requesterDepartment || '—'}</div>
-                      <div className="break-words">الموقع: {row.location || '—'}</div>
-                      <div className="break-words">العنصر المطلوب: {row.itemName || '—'}</div>
                       <div>الإنشاء: {formatDate(row.createdAt)}</div>
                     </div>
+                    <div className="text-sm leading-7 text-[#304342] line-clamp-2">{row.description || '—'}</div>
+                    {row.attachmentLabels?.length ? <div className="text-xs text-[#61706f]">المرفقات: {row.attachmentLabels.join('، ')}</div> : null}
                   </div>
-
                   <div className="flex w-full flex-col gap-2 sm:w-auto">
                     <Button className="w-full sm:w-auto" onClick={() => setSelected(row)}>فتح التفاصيل</Button>
                   </div>
@@ -185,60 +184,62 @@ export default function EmailDraftsPage() {
         )}
       </section>
 
-      <Modal isOpen={!!selected} onClose={() => setSelected(null)} title={selected ? `تفاصيل المراسلة: ${selected.subject}` : 'تفاصيل المراسلة'} size="full">
+      <Modal isOpen={!!selected} onClose={() => setSelected(null)} title={selected ? `تفاصيل المراسلة: ${selected.subject}` : 'تفاصيل المراسلة'}>
         {selected ? (
-          <div className="space-y-5">
-            <div className="grid gap-4 lg:grid-cols-2">
-              <div className="rounded-[22px] border border-[#e7ebea] bg-white p-4">
-                <div className="mb-3 text-sm font-extrabold text-[#016564]">ملخص المراسلة</div>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <div className="rounded-[18px] border border-[#e7ebea] bg-[#fcfdfd] px-4 py-3 sm:col-span-2"><div className="text-xs font-bold text-[#016564]">الموضوع</div><div className="mt-1 break-words text-sm leading-7 text-[#304342]">{selected.subject}</div></div>
-                  <div className="rounded-[18px] border border-[#e7ebea] bg-[#fcfdfd] px-4 py-3"><div className="text-xs font-bold text-[#016564]">نوع الطلب</div><div className="mt-1 text-sm leading-7 text-[#304342]">{selected.requestType || '—'}</div></div>
-                  <div className="rounded-[18px] border border-[#e7ebea] bg-[#fcfdfd] px-4 py-3"><div className="text-xs font-bold text-[#016564]">رقم الطلب</div><div className="mt-1 text-sm leading-7 text-[#304342]">{selected.requestCode || '—'}</div></div>
-                  <div className="rounded-[18px] border border-[#e7ebea] bg-[#fcfdfd] px-4 py-3 sm:col-span-2"><div className="text-xs font-bold text-[#016564]">إلى</div><div className="mt-1 break-all text-sm leading-7 text-[#304342]">{selected.to}</div></div>
-                  <div className="rounded-[18px] border border-[#e7ebea] bg-[#fcfdfd] px-4 py-3"><div className="text-xs font-bold text-[#016564]">الحالة</div><div className="mt-1 text-sm leading-7 text-[#304342]">{statusMeta(selected.status).label}</div></div>
-                  <div className="rounded-[18px] border border-[#e7ebea] bg-[#fcfdfd] px-4 py-3"><div className="text-xs font-bold text-[#016564]">تاريخ الإنشاء</div><div className="mt-1 text-sm leading-7 text-[#304342]">{formatDate(selected.createdAt)}</div></div>
-                  <div className="rounded-[18px] border border-[#e7ebea] bg-[#fcfdfd] px-4 py-3"><div className="text-xs font-bold text-[#016564]">مقدم الطلب</div><div className="mt-1 text-sm leading-7 text-[#304342]">{selected.requesterName || '—'}</div></div>
-                  <div className="rounded-[18px] border border-[#e7ebea] bg-[#fcfdfd] px-4 py-3"><div className="text-xs font-bold text-[#016564]">الإدارة</div><div className="mt-1 text-sm leading-7 text-[#304342]">{selected.requesterDepartment || '—'}</div></div>
-                  <div className="rounded-[18px] border border-[#e7ebea] bg-[#fcfdfd] px-4 py-3"><div className="text-xs font-bold text-[#016564]">البريد الإلكتروني</div><div className="mt-1 break-all text-sm leading-7 text-[#304342]">{selected.requesterEmail || '—'}</div></div>
-                  <div className="rounded-[18px] border border-[#e7ebea] bg-[#fcfdfd] px-4 py-3"><div className="text-xs font-bold text-[#016564]">التحويلة</div><div className="mt-1 text-sm leading-7 text-[#304342]">{selected.requesterExtension || '—'}</div></div>
-                  <div className="rounded-[18px] border border-[#e7ebea] bg-[#fcfdfd] px-4 py-3"><div className="text-xs font-bold text-[#016564]">الموقع</div><div className="mt-1 text-sm leading-7 text-[#304342]">{selected.location || '—'}</div></div>
-                  <div className="rounded-[18px] border border-[#e7ebea] bg-[#fcfdfd] px-4 py-3"><div className="text-xs font-bold text-[#016564]">العنصر المطلوب</div><div className="mt-1 text-sm leading-7 text-[#304342]">{selected.itemName || '—'}</div></div>
-                </div>
+          <div className="space-y-4">
+            <div className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+              <div className="rounded-[24px] border border-[#e7ebea] bg-[#fcfdfd] p-4 sm:p-5">
+                <div className="text-sm font-bold text-[#016564]">المذكرة الجاهزة للإرسال</div>
+                <div dir="rtl" className="mt-3 overflow-x-auto rounded-2xl border border-[#e7ebea] bg-white p-4" dangerouslySetInnerHTML={{ __html: selected.body || '<div>—</div>' }} />
               </div>
-
-              <div className="rounded-[22px] border border-[#e7ebea] bg-white p-4">
-                <div className="mb-3 text-sm font-extrabold text-[#016564]">المذكرة الجاهزة للإرسال</div>
-                <div dir="rtl" className="overflow-x-auto rounded-[18px] border border-[#e7ebea] bg-[#fcfdfd] p-4" dangerouslySetInnerHTML={{ __html: selected.body || '<div>—</div>' }} />
+              <div className="space-y-3">
+                <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl"><div className="text-xs font-bold text-[#016564]">الموضوع</div><div className="mt-1 break-words text-sm leading-7 text-[#304342]">{selected.subject}</div></div>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                  <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl"><div className="text-xs font-bold text-[#016564]">رقم الطلب</div><div className="mt-1 text-sm leading-7 text-[#304342]">{selected.requestCode || '—'}</div></div>
+                  <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl"><div className="text-xs font-bold text-[#016564]">نوع الطلب</div><div className="mt-1 text-sm leading-7 text-[#304342]">{selected.typeLabel || '—'}</div></div>
+                </div>
+                <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl"><div className="text-xs font-bold text-[#016564]">إلى</div><div className="mt-1 break-all text-sm leading-7 text-[#304342]">{selected.to || '—'}</div></div>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                  <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl"><div className="text-xs font-bold text-[#016564]">تاريخ الإنشاء</div><div className="mt-1 text-sm leading-7 text-[#304342]">{formatDate(selected.createdAt)}</div></div>
+                  <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl"><div className="text-xs font-bold text-[#016564]">الحالة</div><div className="mt-1 text-sm leading-7 text-[#304342]">{statusMeta(selected.status).label}</div></div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                  <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl"><div className="text-xs font-bold text-[#016564]">مقدم الطلب</div><div className="mt-1 text-sm leading-7 text-[#304342]">{selected.requesterName || '—'}</div></div>
+                  <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl"><div className="text-xs font-bold text-[#016564]">الإدارة</div><div className="mt-1 text-sm leading-7 text-[#304342]">{selected.requesterDepartment || '—'}</div></div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                  <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl"><div className="text-xs font-bold text-[#016564]">البريد الإلكتروني</div><div className="mt-1 break-all text-sm leading-7 text-[#304342]">{selected.requesterEmail || '—'}</div></div>
+                  <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl"><div className="text-xs font-bold text-[#016564]">الجوال</div><div className="mt-1 text-sm leading-7 text-[#304342]">{selected.requesterMobile || '—'}</div></div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                  <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl"><div className="text-xs font-bold text-[#016564]">التحويلة</div><div className="mt-1 text-sm leading-7 text-[#304342]">{selected.requesterExtension || '—'}</div></div>
+                  <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl"><div className="text-xs font-bold text-[#016564]">الموقع</div><div className="mt-1 text-sm leading-7 text-[#304342]">{selected.location || '—'}</div></div>
+                </div>
+                <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl"><div className="text-xs font-bold text-[#016564]">العنصر المطلوب</div><div className="mt-1 text-sm leading-7 text-[#304342]">{selected.itemName || '—'}</div></div>
+                <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl"><div className="text-xs font-bold text-[#016564]">ملخص الطلب</div><div className="mt-1 break-words text-sm leading-7 text-[#304342]">{selected.description || '—'}</div></div>
+                <div className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3 sm:rounded-2xl"><div className="text-xs font-bold text-[#016564]">المرفقات</div><div className="mt-1 text-sm leading-7 text-[#304342]">{selected.attachmentLabels?.length ? selected.attachmentLabels.join('، ') : 'لا توجد مرفقات'}</div></div>
               </div>
             </div>
-
             <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-              <Button
-                className="w-full sm:w-auto"
-                onClick={async () => {
-                  try {
-                    const res = await fetch(`/api/email-drafts/${selected.id}/download`);
-                    if (!res.ok) {
-                      const errorData = await res.json().catch(() => ({}));
-                      throw new Error(errorData?.error || 'تعذر تنزيل ملف المراسلة حاليًا');
-                    }
-                    const blob = await res.blob();
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `${selected.subject}.eml`;
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                    window.URL.revokeObjectURL(url);
-                  } catch (error: any) {
-                    alert(error?.message || 'تعذر تنزيل ملف المراسلة حاليًا');
-                  }
-                }}
-              >
-                تنزيل .eml
-              </Button>
+              <Button className="w-full sm:w-auto" onClick={async () => {
+                try {
+                  const res = await fetch(`/api/email-drafts/${selected.id}/download`);
+                  if (!res.ok) throw new Error('تعذر تنزيل ملف المراسلة حاليًا');
+                  const blob = await res.blob();
+                  const url = window.URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = `${selected.subject}.eml`;
+                  document.body.appendChild(a);
+                  a.click();
+                  a.remove();
+                  window.URL.revokeObjectURL(url);
+                  await fetchRows();
+                  setSelected(null);
+                } catch (error: any) {
+                  alert(error?.message || 'تعذر تنزيل ملف المراسلة حاليًا');
+                }
+              }}>تنزيل .eml</Button>
               <Button variant="ghost" onClick={() => setSelected(null)} className="w-full sm:w-auto">إغلاق</Button>
             </div>
           </div>
