@@ -1,131 +1,43 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { DraftStatus } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 
-type ParsedSuggestionData = {
-  publicCode?: string;
-  linkedCode?: string;
-  itemName?: string;
-  location?: string;
-  attachments?: Array<{ name?: string; filename?: string; type?: string; url?: string }>;
-};
-
-function parseJsonObject(value?: string | null): Record<string, any> {
-  if (!value) return {};
+function parseJsonObject(value?: string | null) {
+  if (!value) return {} as Record<string, any>;
   try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === 'object' ? parsed : {};
+    const parsed = JSON.parse(String(value));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   } catch {
-    return {};
+    return {} as Record<string, any>;
   }
 }
 
-function normalizeArabic(value: string) {
-  return (value || '')
-    .toLowerCase()
-    .trim()
-    .replace(/[أإآ]/g, 'ا')
-    .replace(/ة/g, 'ه')
-    .replace(/ى/g, 'ي')
-    .replace(/ؤ/g, 'و')
-    .replace(/ئ/g, 'ي')
-    .replace(/ء/g, '')
-    .replace(/\s+/g, ' ');
+function attachmentLabelFromName(filename: string, index: number) {
+  const lower = String(filename || '').toLowerCase();
+  if (/(\.png|\.jpg|\.jpeg|\.gif|\.webp|\.bmp|\.svg)$/.test(lower)) return `صورة مرفقة ${index}`;
+  if (/(\.mp4|\.mov|\.avi|\.mkv|\.webm)$/.test(lower)) return `فيديو مرفق ${index}`;
+  if (/\.pdf$/.test(lower)) return `ملف PDF مرفق ${index}`;
+  return `مرفق ${index}`;
 }
 
-function categoryLabel(sourceType?: string | null, subject?: string | null) {
-  const value = normalizeArabic(`${sourceType || ''} ${subject || ''}`);
-  if (value.includes('purchase') || value.includes('شراء')) return 'طلب شراء مباشر';
-  if (value.includes('clean') || value.includes('نظاف')) return 'طلب نظافة';
-  if (value.includes('maint') || value.includes('صيان')) return 'طلب صيانة';
-  if (value.includes('other') || value.includes('اخر')) return 'طلب آخر';
-  return 'مراسلة خارجية';
-}
+function simplifyAttachmentNames(html?: string | null) {
+  let output = String(html || '');
+  const matches = output.match(/[a-z0-9]{8}-[a-z0-9-]{27,}\.[a-z0-9]+/gi) || [];
+  const labels = new Map<string, string>();
+  let counter = 1;
 
-function fileKindFromName(filename?: string | null) {
-  const ext = String(filename || '').split('.').pop()?.toLowerCase() || '';
-  if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'svg'].includes(ext)) return 'صورة';
-  if (['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v'].includes(ext)) return 'فيديو';
-  if (ext === 'pdf') return 'ملف PDF';
-  if (['doc', 'docx'].includes(ext)) return 'ملف Word';
-  if (['xls', 'xlsx', 'csv'].includes(ext)) return 'ملف Excel';
-  if (['ppt', 'pptx'].includes(ext)) return 'عرض تقديمي';
-  return 'ملف مرفق';
-}
-
-function formatAttachmentLabels(attachments: ParsedSuggestionData['attachments']) {
-  if (!Array.isArray(attachments) || !attachments.length) return [] as string[];
-
-  const counters: Record<string, number> = {};
-  return attachments.map((attachment) => {
-    const kind = fileKindFromName(attachment?.name || attachment?.filename || attachment?.url || '');
-    counters[kind] = (counters[kind] || 0) + 1;
-    return `${kind} ${counters[kind]}`;
-  });
-}
-
-function sanitizeBodyForDisplay(html?: string | null, attachmentLabels?: string[]) {
-  let body = String(html || '').trim();
-  if (!body) return '<div dir="rtl">—</div>';
-
-  body = body.replace(
-    /<div[^>]*>\s*المرفقات المرفوعه[^<]*<\/div>\s*<div[^>]*>[\s\S]*?<\/div>/i,
-    ''
-  );
-
-  if (attachmentLabels?.length) {
-    const attachmentHtml = `
-      <div style="margin-top:16px;font-weight:700;">المرفقات المرفوعة</div>
-      <div style="margin-top:8px;">${attachmentLabels.join('، ')}</div>
-    `;
-
-    if (body.includes('فريق عمل إدارة عمليات التدريب')) {
-      body = body.replace(/<div[^>]*>\s*فريق عمل إدارة عمليات التدريب[\s\S]*$/i, `${attachmentHtml}$&`);
-    } else {
-      body += attachmentHtml;
+  for (const match of matches) {
+    if (!labels.has(match)) {
+      labels.set(match, attachmentLabelFromName(match, counter));
+      counter += 1;
     }
   }
 
-  return body;
-}
-
-async function findRelatedSuggestion(draft: { id: string; sourceType: string; sourceId: string }) {
-  const byAdminNotes = await prisma.suggestion.findFirst({
-    where: {
-      adminNotes: { contains: draft.id },
-    },
-    include: {
-      requester: {
-        select: {
-          fullName: true,
-          email: true,
-          department: true,
-          mobile: true,
-          jobTitle: true,
-        },
-      },
-    },
-  });
-
-  if (byAdminNotes) return byAdminNotes;
-
-  if (draft.sourceType === 'suggestion' || draft.sourceType === 'other') {
-    return prisma.suggestion.findUnique({
-      where: { id: draft.sourceId },
-      include: {
-        requester: {
-          select: {
-            fullName: true,
-            email: true,
-            department: true,
-            mobile: true,
-            jobTitle: true,
-          },
-        },
-      },
-    });
+  for (const [raw, label] of labels.entries()) {
+    output = output.split(raw).join(label);
   }
 
-  return null;
+  return output;
 }
 
 export async function GET(_request: NextRequest) {
@@ -134,42 +46,108 @@ export async function GET(_request: NextRequest) {
       orderBy: { createdAt: 'desc' },
     });
 
-    const data = await Promise.all(
-      drafts.map(async (draft) => {
-        const suggestion = await findRelatedSuggestion(draft);
-        const justification = parseJsonObject(suggestion?.justification) as ParsedSuggestionData;
-        const adminData = parseJsonObject(suggestion?.adminNotes);
-        const attachmentLabels = formatAttachmentLabels(justification.attachments);
-        const bodyHtml = sanitizeBodyForDisplay(draft.body, attachmentLabels);
+    const suggestions = await prisma.suggestion.findMany({
+      select: {
+        id: true,
+        title: true,
+        category: true,
+        description: true,
+        requesterId: true,
+        justification: true,
+        adminNotes: true,
+        createdAt: true,
+      },
+    });
 
-        return {
-          id: draft.id,
-          subject: draft.subject,
-          to: draft.recipient,
-          cc: suggestion?.requester?.email || '',
-          body: bodyHtml,
-          status: draft.status,
-          createdAt: draft.createdAt,
-          updatedAt: draft.copiedAt || draft.createdAt,
-          typeLabel: categoryLabel(draft.sourceType, draft.subject),
-          requestCode: String(adminData.linkedCode || justification.publicCode || draft.subject || '—'),
-          requesterName: suggestion?.requester?.fullName || '—',
-          requesterEmail: suggestion?.requester?.email || '—',
-          requesterDepartment: suggestion?.requester?.department || '—',
-          requesterMobile: suggestion?.requester?.mobile || '—',
-          requesterJobTitle: suggestion?.requester?.jobTitle || '—',
-          location: String(justification.location || '—'),
-          itemName: String(justification.itemName || '—'),
-          description: suggestion?.description || '—',
-          attachmentLabels,
-        };
-      })
-    );
+    const linkedMap = new Map<string, {
+      title: string;
+      category: string;
+      description: string;
+      requesterId: string;
+      itemName: string;
+      location: string;
+      createdAt: Date;
+    }>();
 
-    return NextResponse.json({ data });
+    const requesterIds = new Set<string>();
+
+    for (const suggestion of suggestions) {
+      requesterIds.add(suggestion.requesterId);
+      const admin = parseJsonObject(suggestion.adminNotes);
+      const justification = parseJsonObject(suggestion.justification);
+      const linkedDraftId = String(admin.linkedDraftId || '').trim();
+      if (!linkedDraftId) continue;
+
+      linkedMap.set(linkedDraftId, {
+        title: suggestion.title,
+        category: suggestion.category,
+        description: suggestion.description,
+        requesterId: suggestion.requesterId,
+        itemName: String(justification.itemName || ''),
+        location: String(justification.location || ''),
+        createdAt: suggestion.createdAt,
+      });
+    }
+
+    const users = await prisma.user.findMany({
+      where: { id: { in: [...requesterIds] } },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        department: true,
+        mobile: true,
+        jobTitle: true,
+      },
+    });
+
+    const userMap = new Map(users.map((user) => [user.id, user]));
+
+    const data = drafts.map((draft) => {
+      const linked = linkedMap.get(draft.id) || null;
+      const requester = linked ? userMap.get(linked.requesterId) || null : null;
+
+      return {
+        id: draft.id,
+        subject: draft.subject,
+        to: draft.recipient,
+        cc: null,
+        body: simplifyAttachmentNames(draft.body),
+        status: draft.status,
+        createdAt: draft.createdAt,
+        updatedAt: draft.copiedAt || draft.createdAt,
+        sourceType: draft.sourceType,
+        sourceId: draft.sourceId,
+        requestTitle: linked?.title || draft.subject,
+        requestType: linked?.category || draft.sourceType,
+        requestDescription: linked?.description || '',
+        itemName: linked?.itemName || '',
+        location: linked?.location || '',
+        requester: requester
+          ? {
+              fullName: requester.fullName,
+              email: requester.email,
+              department: requester.department,
+              mobile: requester.mobile,
+              extension: '',
+              jobTitle: requester.jobTitle,
+            }
+          : null,
+      };
+    });
+
+    return NextResponse.json({
+      data,
+      stats: {
+        total: data.length,
+        drafts: data.filter((row) => row.status === DraftStatus.DRAFT).length,
+        copied: data.filter((row) => row.status === DraftStatus.COPIED).length,
+        sent: data.filter((row) => row.status === DraftStatus.SENT).length,
+      },
+    });
   } catch (error: any) {
     return NextResponse.json(
-      { error: error?.message || 'تعذر تحميل المراسلات الخارجية' },
+      { error: error?.message || 'تعذر جلب المراسلات الخارجية' },
       { status: 500 }
     );
   }
