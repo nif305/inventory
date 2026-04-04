@@ -1,27 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
-type JsonObject = Record<string, any>;
-type AttachmentPayload = {
-  filename?: string;
-  contentType?: string;
-  base64Content?: string;
-};
-
-type SuggestionLite = {
-  id: string;
-  title: string;
-  description: string;
-  category: string;
-  requesterId: string;
-  createdAt: Date;
-  justification: string;
-  adminNotes: string | null;
-};
-
-function parseJsonObject(value: unknown): JsonObject {
+function parseJsonObject(value: any): Record<string, any> {
   if (!value) return {};
-  if (typeof value === 'object' && !Array.isArray(value)) return value as JsonObject;
+  if (typeof value === 'object' && !Array.isArray(value)) return value;
   try {
     const parsed = JSON.parse(String(value));
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
@@ -30,16 +12,35 @@ function parseJsonObject(value: unknown): JsonObject {
   }
 }
 
-function normalizeCategory(value?: string | null) {
-  const normalized = String(value || '').trim().toUpperCase();
-  if (normalized === 'MAINTENANCE') return 'MAINTENANCE';
-  if (normalized === 'CLEANING') return 'CLEANING';
-  if (normalized === 'PURCHASE') return 'PURCHASE';
-  return 'OTHER';
+type AttachmentPayload = {
+  filename?: string;
+  contentType?: string;
+  base64Content?: string;
+};
+
+function normalizeAttachments(input: any): AttachmentPayload[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .filter((item) => item && typeof item === 'object')
+    .map((item) => ({
+      filename: String(item.filename || '').trim(),
+      contentType: String(item.contentType || '').trim(),
+      base64Content: String(item.base64Content || '').trim(),
+    }))
+    .filter((item) => item.filename || item.base64Content);
 }
 
-function requestTypeLabel(category: string) {
-  switch (normalizeCategory(category)) {
+function attachmentDisplayName(file: AttachmentPayload, index: number) {
+  const type = String(file.contentType || '').toLowerCase();
+  const name = String(file.filename || '').toLowerCase();
+  if (type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(name)) return `صورة مرفقة ${index + 1}`;
+  if (type.startsWith('video/') || /\.(mp4|mov|avi|mkv|webm)$/i.test(name)) return `فيديو مرفق ${index + 1}`;
+  if (type.includes('pdf') || /\.pdf$/i.test(name)) return `ملف PDF مرفق ${index + 1}`;
+  return `مرفق ${index + 1}`;
+}
+
+function categoryLabel(category?: string | null) {
+  switch (String(category || '').toUpperCase()) {
     case 'MAINTENANCE':
       return 'طلب صيانة';
     case 'CLEANING':
@@ -51,31 +52,103 @@ function requestTypeLabel(category: string) {
   }
 }
 
-function simplifyAttachmentName(file: AttachmentPayload, index: number) {
-  const mime = String(file?.contentType || '').toLowerCase();
-  const name = String(file?.filename || '').toLowerCase();
-  const kind = mime || name;
-  if (kind.includes('image/')) return `صورة مرفقة ${index + 1}`;
-  if (kind.includes('video/')) return `فيديو مرفق ${index + 1}`;
-  if (kind.includes('pdf')) return `ملف PDF مرفق ${index + 1}`;
-  return `مرفق ${index + 1}`;
-}
-
-function sanitizeRichHtml(html?: string | null) {
-  return String(html || '')
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/on\w+="[^"]*"/gi, '')
-    .trim();
-}
-
-function findSuggestionForDraft(draft: { id: string; sourceId: string }, suggestions: SuggestionLite[]) {
-  for (const suggestion of suggestions) {
-    const adminData = parseJsonObject(suggestion.adminNotes);
-    if (String(adminData.linkedDraftId || '') === draft.id) return suggestion;
-    if (suggestion.id === draft.sourceId) return suggestion;
-    if (String(adminData.linkedEntityId || '') === draft.sourceId) return suggestion;
+function buildRecipientLabel(category?: string | null) {
+  const normalized = String(category || '').toUpperCase();
+  if (normalized === 'MAINTENANCE' || normalized === 'CLEANING') {
+    return 'سعادة مدير إدارة الخدمات المساندة سلمه الله';
   }
-  return null;
+  if (normalized === 'PURCHASE') {
+    return 'سعادة الأستاذ نواف المحارب سلمه الله';
+  }
+  return 'إلى من يهمه الأمر';
+}
+
+function formatDate(value?: Date | string | null) {
+  if (!value) return '—';
+  try {
+    return new Intl.DateTimeFormat('ar-SA', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      timeZone: 'Asia/Riyadh',
+    }).format(new Date(value));
+  } catch {
+    return '—';
+  }
+}
+
+function escapeHtml(value?: string | null) {
+  return String(value || '—')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function buildEmailHtml(params: {
+  recipientLabel: string;
+  requestCode: string;
+  requestTitle: string;
+  categoryLabel: string;
+  createdAt: Date | string;
+  requesterName: string;
+  requesterDepartment: string;
+  requesterEmail: string;
+  requesterMobile: string;
+  requesterJobTitle: string;
+  location: string;
+  itemName: string;
+  description: string;
+  adminNotes?: string;
+  attachments: string[];
+}) {
+  const rows: Array<[string, string]> = [
+    ['رقم الطلب', params.requestCode],
+    ['نوع الطلب', params.categoryLabel],
+    ['عنوان الطلب', params.requestTitle],
+    ['التاريخ', formatDate(params.createdAt)],
+    ['مقدم الطلب', params.requesterName || '—'],
+    ['الإدارة', 'إدارة عمليات التدريب'],
+    ['البريد الإلكتروني', params.requesterEmail || '—'],
+    ['الجوال', params.requesterMobile || '—'],
+    ['الصفة الوظيفية', params.requesterJobTitle || '—'],
+    ['الموقع', params.location || '—'],
+    ['العنصر المطلوب', params.itemName || '—'],
+    ['سبب الطلب', params.description || '—'],
+  ];
+
+  if (params.adminNotes) rows.push(['توجيه المدير', params.adminNotes]);
+  if (params.attachments.length) rows.push(['المرفقات المرفوعة', params.attachments.join('، ')]);
+
+  const tableRows = rows
+    .map(
+      ([label, value]) =>
+        `<tr><td style="padding:10px 12px;border:1px solid #d6d7d4;font-weight:700;background:#f8fbfb;width:190px;">${escapeHtml(label)}</td><td style="padding:10px 12px;border:1px solid #d6d7d4;">${escapeHtml(value)}</td></tr>`
+    )
+    .join('');
+
+  return `
+  <div dir="rtl" style="font-family:Cairo,Tahoma,Arial,sans-serif;color:#152625;line-height:2;">
+    <div style="font-size:20px;font-weight:800;margin-bottom:10px;">${escapeHtml(params.recipientLabel)}</div>
+    <div style="margin-bottom:10px;">السلام عليكم ورحمة الله وبركاته،</div>
+    <div style="margin-bottom:10px;">تحية طيبة وبعد،</div>
+    <div style="margin-bottom:14px;">نفيد سعادتكم بأن الموظف <strong>${escapeHtml(params.requesterName || 'مقدم الطلب')}</strong> من <strong>إدارة عمليات التدريب</strong> رفع ${escapeHtml(params.categoryLabel)}، ونأمل من سعادتكم التكرم بالاطلاع على التفاصيل الموضحة أدناه واتخاذ ما يلزم حيال المعالجة في أقرب وقت ممكن.</div>
+    <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px;">${tableRows}</table>
+    ${params.attachments.length ? `<div style="margin-top:10px;">مرفق مع هذه المسودة ${escapeHtml(params.attachments.join('، '))}.</div>` : ''}
+    <div style="margin-top:16px;">وتفضلوا بقبول خالص التحية والتقدير.</div>
+    <div style="margin-top:18px;font-weight:700;">فريق عمل إدارة عمليات التدريب<br/>وكالة الجامعة للتدريب</div>
+  </div>`;
+}
+
+function findRelatedSuggestion(draft: any, suggestions: any[]) {
+  return (
+    suggestions.find((item) => item.id === draft.sourceId) ||
+    suggestions.find((item) => {
+      const admin = parseJsonObject(item.adminNotes);
+      return admin.linkedDraftId === draft.id || admin.linkedEntityId === draft.sourceId;
+    }) ||
+    null
+  );
 }
 
 export async function GET(_request: NextRequest) {
@@ -93,80 +166,75 @@ export async function GET(_request: NextRequest) {
         id: true,
         title: true,
         description: true,
+        justification: true,
+        adminNotes: true,
         category: true,
         requesterId: true,
         createdAt: true,
-        justification: true,
-        adminNotes: true,
+        status: true,
       },
-      orderBy: { createdAt: 'desc' },
     });
 
     const requesterIds = Array.from(new Set(suggestions.map((item) => item.requesterId).filter(Boolean)));
     const users = requesterIds.length
       ? await prisma.user.findMany({
           where: { id: { in: requesterIds } },
-          select: {
-            id: true,
-            fullName: true,
-            email: true,
-            mobile: true,
-            department: true,
-            jobTitle: true,
-          },
+          select: { id: true, fullName: true, department: true, email: true, phone: true, position: true },
         })
       : [];
+    const requesterMap = new Map(users.map((user) => [user.id, user]));
 
-    const userMap = new Map(users.map((user) => [user.id, user]));
-
-    const data = drafts.map((draft) => {
-      const suggestion = findSuggestionForDraft(draft, suggestions);
+    const rows = drafts.map((draft) => {
+      const suggestion = findRelatedSuggestion(draft, suggestions);
       const justification = parseJsonObject(suggestion?.justification);
-      const adminData = parseJsonObject(suggestion?.adminNotes);
-      const requester = suggestion ? userMap.get(suggestion.requesterId) : null;
-      const attachments = Array.isArray(justification.attachments) ? (justification.attachments as AttachmentPayload[]) : [];
-      const requestCode = String(adminData.linkedCode || justification.publicCode || draft.sourceId || '').trim() || draft.id;
-      const category = normalizeCategory(suggestion?.category || draft.sourceType);
-      const recipient = String(draft.recipient || '').trim();
+      const admin = parseJsonObject(suggestion?.adminNotes);
+      const requester = suggestion ? requesterMap.get(suggestion.requesterId) : null;
+      const attachments = normalizeAttachments(justification.attachments);
+      const attachmentLabels = attachments.map(attachmentDisplayName);
+      const requestCode = String(admin.linkedCode || justification.publicCode || draft.sourceId || draft.id);
+      const requestTypeLabel = categoryLabel(suggestion?.category || draft.sourceType);
+      const body = buildEmailHtml({
+        recipientLabel: buildRecipientLabel(suggestion?.category || draft.sourceType),
+        requestCode,
+        requestTitle: suggestion?.title || draft.subject,
+        categoryLabel: requestTypeLabel,
+        createdAt: suggestion?.createdAt || draft.createdAt,
+        requesterName: requester?.fullName || '—',
+        requesterDepartment: 'إدارة عمليات التدريب',
+        requesterEmail: requester?.email || '—',
+        requesterMobile: requester?.phone || '—',
+        requesterJobTitle: requester?.position || '—',
+        location: String(justification.location || '—'),
+        itemName: String(justification.itemName || suggestion?.title || '—'),
+        description: String(suggestion?.description || '—'),
+        adminNotes: String(admin.adminNotes || '').trim(),
+        attachments: attachmentLabels,
+      });
 
       return {
         id: draft.id,
         subject: draft.subject,
-        to: recipient,
-        body: sanitizeRichHtml(draft.body),
+        to: draft.recipient,
         status: draft.status,
         createdAt: draft.createdAt,
         copiedAt: draft.copiedAt,
         requestCode,
-        requestType: requestTypeLabel(category),
+        requestTypeLabel,
         requesterName: requester?.fullName || '—',
-        requesterEmail: requester?.email || '—',
-        requesterMobile: requester?.mobile || '—',
         requesterDepartment: 'إدارة عمليات التدريب',
-        requesterJobTitle: requester?.jobTitle || '—',
+        requesterEmail: requester?.email || '—',
+        requesterMobile: requester?.phone || '—',
+        requesterJobTitle: requester?.position || '—',
         location: String(justification.location || '—'),
         itemName: String(justification.itemName || suggestion?.title || '—'),
         description: String(suggestion?.description || '—'),
-        recipientLabel:
-          category === 'PURCHASE'
-            ? 'سعادة الأستاذ نواف المحارب سلمه الله'
-            : category === 'MAINTENANCE' || category === 'CLEANING'
-              ? 'سعادة مدير إدارة الخدمات المساندة سلمه الله'
-              : 'إلى من يهمه الأمر',
-        attachments: attachments.map((file, index) => ({
-          label: simplifyAttachmentName(file, index),
-          originalName: String(file?.filename || '').trim() || simplifyAttachmentName(file, index),
-          contentType: String(file?.contentType || '').trim() || 'application/octet-stream',
-          hasContent: Boolean(String(file?.base64Content || '').trim()),
-        })),
+        attachments: attachmentLabels,
+        body,
       };
     });
 
-    return NextResponse.json({ data });
+    return NextResponse.json({ data: rows });
   } catch (error: any) {
-    return NextResponse.json(
-      { error: error?.message || 'تعذر تحميل المراسلات الخارجية' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: error?.message || 'تعذر جلب المراسلات الخارجية' }, { status: 500 });
   }
 }

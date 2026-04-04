@@ -166,61 +166,46 @@ function buildNotificationTitle(category: SuggestionCategory) {
   return `${categoryMeta(category).notification} جديد`;
 }
 
-function simplifyAttachmentName(file: any, index: number) {
-  const mime = String(file?.contentType || '').toLowerCase();
-  const name = String(file?.filename || '').toLowerCase();
-  const kind = mime || name;
-  if (kind.includes('image/')) return `صورة مرفقة ${index + 1}`;
-  if (kind.includes('video/')) return `فيديو مرفق ${index + 1}`;
-  if (kind.includes('pdf')) return `ملف PDF مرفق ${index + 1}`;
-  return `مرفق ${index + 1}`;
-}
-
 function buildExternalEmailHtml(params: {
   recipientLabel: string;
+  introLine: string;
   requestCode: string;
-  requestType: string;
   requestTitle: string;
   createdAt: Date;
   requesterName: string;
   requesterDepartment: string;
   requesterEmail: string;
-  requesterMobile: string;
-  requesterJobTitle: string;
   location?: string;
+  quantity?: number | null;
   itemName?: string;
   description: string;
+  justification?: string;
   adminNotes?: string;
-  attachmentLabels?: string[];
 }) {
   const rows = [
     ['رقم الطلب', params.requestCode],
-    ['نوع الطلب', params.requestType],
-    ['عنوان الطلب', params.requestTitle],
+    ['نوع الطلب', params.requestTitle],
     ['التاريخ', new Intl.DateTimeFormat('ar-SA', { year: 'numeric', month: 'long', day: 'numeric' }).format(new Date(params.createdAt))],
     ['مقدم الطلب', params.requesterName],
     ['الإدارة', 'إدارة عمليات التدريب'],
     ['البريد الإلكتروني', params.requesterEmail || '—'],
-    ['الجوال', params.requesterMobile || '—'],
-    ['الصفة الوظيفية', params.requesterJobTitle || '—'],
     ['الموقع', params.location || '—'],
     ['العنصر المطلوب', params.itemName || '—'],
-    ['وصف الطلب', params.description || '—'],
+    ['سبب الطلب', params.description || '—'],
   ];
+  if (params.justification) rows.push(['إيضاحات إضافية', params.justification]);
   if (params.adminNotes) rows.push(['توجيه المدير', params.adminNotes]);
-  if (params.attachmentLabels?.length) rows.push(['المرفقات المرفوعة', params.attachmentLabels.join('، ')]);
 
-  const tableRows = rows.map(([label, value]) => `<tr><td style="padding:10px 12px;border:1px solid #d6d7d4;font-weight:700;background:#f8fbfb;width:190px;vertical-align:top;">${label}</td><td style="padding:10px 12px;border:1px solid #d6d7d4;vertical-align:top;">${value}</td></tr>`).join('');
+  const tableRows = rows.map(([label, value]) => `<tr><td style="padding:10px 12px;border:1px solid #d6d7d4;font-weight:700;background:#f8fbfb;width:180px;">${label}</td><td style="padding:10px 12px;border:1px solid #d6d7d4;">${value}</td></tr>`).join('');
 
   return `
-  <div dir="rtl" style="font-family:Cairo,Tahoma,Arial,sans-serif;color:#1f2937;line-height:1.95;">
+  <div dir="rtl" style="font-family:Cairo,Tahoma,Arial,sans-serif;color:#1f2937;line-height:2;">
     <div style="font-size:18px;font-weight:700;margin-bottom:12px;">${params.recipientLabel}</div>
     <div style="margin-bottom:12px;">السلام عليكم ورحمة الله وبركاته،</div>
     <div style="margin-bottom:12px;">تحية طيبة وبعد،</div>
-    <div style="margin-bottom:12px;">نرفع إلى سعادتكم هذا الطلب الوارد من الموظف <strong>${params.requesterName}</strong> بإدارة عمليات التدريب، والمتعلق بـ<strong>${params.requestType}</strong>، آملين التكرم بالاطلاع على البيانات أدناه واتخاذ ما ترونه مناسبًا حيال معالجته.</div>
-    ${params.attachmentLabels?.length ? `<div style="margin-bottom:12px;">وقد أُرفقت مع هذه المذكرة المرفقات ذات الصلة التالية: <strong>${params.attachmentLabels.join('، ')}</strong>.</div>` : ''}
+    <div style="margin-bottom:12px;">نفيد سعادتكم بأن الموظف <strong>${params.requesterName || 'مقدم الطلب'}</strong> من <strong>إدارة عمليات التدريب</strong> رفع ${params.requestTitle}، ونأمل من سعادتكم التكرم بالاطلاع على التفاصيل الآتية واتخاذ ما يلزم حيال المعالجة في أقرب وقت ممكن.</div>
     <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px;">${tableRows}</table>
-    <div style="margin-top:14px;">شاكرين لكم تعاونكم، وتفضلوا بقبول خالص التحية والتقدير.</div>
+    <div style="margin-top:14px;">وتفضلوا بقبول خالص التحية والتقدير.</div>
     <div style="margin-top:18px;font-weight:700;">فريق عمل إدارة عمليات التدريب<br/>وكالة الجامعة للتدريب</div>
   </div>`;
 }
@@ -409,7 +394,7 @@ export async function PATCH(request: NextRequest) {
 
     const requester = await prisma.user.findUnique({
       where: { id: suggestion.requesterId },
-      select: { id: true, fullName: true, department: true, email: true, mobile: true, jobTitle: true },
+      select: { id: true, fullName: true, department: true, email: true },
     });
 
     const justificationData = parseJsonObject(suggestion.justification);
@@ -417,7 +402,8 @@ export async function PATCH(request: NextRequest) {
     const category = normalizeCategory(suggestion.category);
     const publicCode = String(justificationData.publicCode || adminData.publicCode || await generatePublicCode(category));
     const itemName = String(justificationData.itemName || '').trim();
-        const location = String(justificationData.location || '').trim();
+    const quantity = Math.max(1, Number(justificationData.quantity || 1));
+    const location = String(justificationData.location || '').trim();
     const externalRecipient = String(justificationData.externalRecipient || '').trim();
 
     if (action === 'reject') {
@@ -550,7 +536,7 @@ export async function PATCH(request: NextRequest) {
     }
 
     const recipient = buildRecipients(category, externalRecipient);
-    const recipientLabel = category === 'PURCHASE' ? 'سعادة الأستاذ نواف المحارب سلمه الله' : category === 'MAINTENANCE' || category === 'CLEANING' ? 'سعادة مدير إدارة الخدمات المساندة سلمه الله' : 'إلى من يهمه الأمر';
+    const recipientLabel = category === 'PURCHASE' ? 'سعادة الأستاذ نواف المحارب سلمه الله' : (category === 'MAINTENANCE' || category === 'CLEANING') ? 'سعادة مدير إدارة الخدمات المساندة سلمه الله' : 'إلى من يهمه الأمر';
 
     let linkedDraftId = String(adminData.linkedDraftId || '');
     let draft = null as any;
@@ -571,19 +557,16 @@ export async function PATCH(request: NextRequest) {
     const draftBody = buildExternalEmailHtml({
       recipientLabel,
       requestCode: linkedCode,
-      requestType: categoryMeta(category).label,
       requestTitle: suggestion.title,
       createdAt: suggestion.createdAt,
       requesterName: requester?.fullName || '—',
-      requesterDepartment: 'إدارة عمليات التدريب',
+      requesterDepartment: requester?.department || '—',
       requesterEmail: requester?.email || '—',
-      requesterMobile: requester?.mobile || '—',
-      requesterJobTitle: requester?.jobTitle || '—',
       location,
+      quantity,
       itemName,
       description: suggestion.description,
       adminNotes,
-      attachmentLabels: Array.isArray(justificationData.attachments) ? justificationData.attachments.map((file: any, index: number) => simplifyAttachmentName(file, index)) : [],
     });
 
     if (draft) {

@@ -1,16 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 
-type JsonObject = Record<string, any>;
-type AttachmentPayload = {
-  filename?: string;
-  contentType?: string;
-  base64Content?: string;
-};
-
-function parseJsonObject(value: unknown): JsonObject {
+function parseJsonObject(value: any): Record<string, any> {
   if (!value) return {};
-  if (typeof value === 'object' && !Array.isArray(value)) return value as JsonObject;
+  if (typeof value === 'object' && !Array.isArray(value)) return value;
   try {
     const parsed = JSON.parse(String(value));
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
@@ -19,16 +12,35 @@ function parseJsonObject(value: unknown): JsonObject {
   }
 }
 
-function normalizeCategory(value?: string | null) {
-  const normalized = String(value || '').trim().toUpperCase();
-  if (normalized === 'MAINTENANCE') return 'MAINTENANCE';
-  if (normalized === 'CLEANING') return 'CLEANING';
-  if (normalized === 'PURCHASE') return 'PURCHASE';
-  return 'OTHER';
+type AttachmentPayload = {
+  filename?: string;
+  contentType?: string;
+  base64Content?: string;
+};
+
+function normalizeAttachments(input: any): AttachmentPayload[] {
+  if (!Array.isArray(input)) return [];
+  return input
+    .filter((item) => item && typeof item === 'object')
+    .map((item) => ({
+      filename: String(item.filename || '').trim(),
+      contentType: String(item.contentType || '').trim() || 'application/octet-stream',
+      base64Content: String(item.base64Content || '').replace(/\s+/g, ''),
+    }))
+    .filter((item) => item.base64Content);
 }
 
-function requestTypeLabel(category: string) {
-  switch (normalizeCategory(category)) {
+function attachmentDisplayName(file: AttachmentPayload, index: number) {
+  const type = String(file.contentType || '').toLowerCase();
+  const name = String(file.filename || '').toLowerCase();
+  if (type.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(name)) return `صورة مرفقة ${index + 1}`;
+  if (type.startsWith('video/') || /\.(mp4|mov|avi|mkv|webm)$/i.test(name)) return `فيديو مرفق ${index + 1}`;
+  if (type.includes('pdf') || /\.pdf$/i.test(name)) return `ملف PDF مرفق ${index + 1}`;
+  return `مرفق ${index + 1}`;
+}
+
+function categoryLabel(category?: string | null) {
+  switch (String(category || '').toUpperCase()) {
     case 'MAINTENANCE':
       return 'طلب صيانة';
     case 'CLEANING':
@@ -40,26 +52,11 @@ function requestTypeLabel(category: string) {
   }
 }
 
-function recipientLabel(category: string) {
-  switch (normalizeCategory(category)) {
-    case 'PURCHASE':
-      return 'سعادة الأستاذ نواف المحارب سلمه الله';
-    case 'MAINTENANCE':
-    case 'CLEANING':
-      return 'سعادة مدير إدارة الخدمات المساندة سلمه الله';
-    default:
-      return 'إلى من يهمه الأمر';
-  }
-}
-
-function simplifyAttachmentName(file: AttachmentPayload, index: number) {
-  const mime = String(file?.contentType || '').toLowerCase();
-  const name = String(file?.filename || '').toLowerCase();
-  const kind = mime || name;
-  if (kind.includes('image/')) return `صورة مرفقة ${index + 1}`;
-  if (kind.includes('video/')) return `فيديو مرفق ${index + 1}`;
-  if (kind.includes('pdf')) return `ملف PDF مرفق ${index + 1}`;
-  return `مرفق ${index + 1}`;
+function recipientLabel(category?: string | null) {
+  const normalized = String(category || '').toUpperCase();
+  if (normalized === 'MAINTENANCE' || normalized === 'CLEANING') return 'سعادة مدير إدارة الخدمات المساندة سلمه الله';
+  if (normalized === 'PURCHASE') return 'سعادة الأستاذ نواف المحارب سلمه الله';
+  return 'إلى من يهمه الأمر';
 }
 
 function escapeHtml(value?: string | null) {
@@ -67,8 +64,11 @@ function escapeHtml(value?: string | null) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+    .replace(/"/g, '&quot;');
+}
+
+function sanitizeHeader(value?: string | null) {
+  return String(value || '').replace(/[\r\n]+/g, ' ').trim();
 }
 
 function stripHtmlToText(html?: string | null) {
@@ -76,9 +76,9 @@ function stripHtmlToText(html?: string | null) {
     .replace(/<style[\s\S]*?<\/style>/gi, '')
     .replace(/<script[\s\S]*?<\/script>/gi, '')
     .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/tr>/gi, '\n')
     .replace(/<\/p>/gi, '\n')
     .replace(/<\/div>/gi, '\n')
+    .replace(/<\/tr>/gi, '\n')
     .replace(/<li>/gi, '• ')
     .replace(/<\/li>/gi, '\n')
     .replace(/<[^>]+>/g, ' ')
@@ -86,311 +86,224 @@ function stripHtmlToText(html?: string | null) {
     .replace(/&amp;/gi, '&')
     .replace(/&lt;/gi, '<')
     .replace(/&gt;/gi, '>')
-    .replace(/&#39;/gi, "'")
-    .replace(/&quot;/gi, '"')
-    .replace(/\n{3,}/g, '\n\n')
     .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
 
-function wrapBase64(input: string) {
-  const value = String(input || '').replace(/\s+/g, '');
-  return value.match(/.{1,76}/g)?.join('\r\n') || '';
+function formatDate(value?: Date | string | null) {
+  if (!value) return '—';
+  try {
+    return new Intl.DateTimeFormat('ar-SA', {
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      timeZone: 'Asia/Riyadh',
+    }).format(new Date(value));
+  } catch {
+    return '—';
+  }
 }
 
-function buildEmailHtml(params: {
-  label: string;
+function safeAttachmentFilename(file: AttachmentPayload, index: number) {
+  const original = String(file.filename || '').trim();
+  const extMatch = original.match(/\.([a-zA-Z0-9]+)$/);
+  const ext = extMatch ? `.${extMatch[1].toLowerCase()}` : '';
+  const type = String(file.contentType || '').toLowerCase();
+  let base = `attachment-${index + 1}`;
+  if (type.startsWith('image/')) base = `image-${index + 1}`;
+  else if (type.startsWith('video/')) base = `video-${index + 1}`;
+  else if (type.includes('pdf')) base = `pdf-${index + 1}`;
+  return `${base}${ext}`;
+}
+
+function buildHtml(params: {
+  toLabel: string;
   requestCode: string;
-  requestType: string;
-  title: string;
-  createdAt: Date;
+  requestTitle: string;
+  categoryLabel: string;
+  createdAt: Date | string;
   requesterName: string;
-  requesterDepartment: string;
   requesterEmail: string;
   requesterMobile: string;
   requesterJobTitle: string;
   location: string;
   itemName: string;
   description: string;
-  adminNotes: string;
-  attachmentLabels: string[];
+  adminNotes?: string;
+  attachments: string[];
 }) {
-  const dateText = new Intl.DateTimeFormat('ar-SA', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  }).format(new Date(params.createdAt));
-
-  const rows = [
+  const rows: Array<[string, string]> = [
     ['رقم الطلب', params.requestCode],
-    ['نوع الطلب', params.requestType],
-    ['عنوان الطلب', params.title],
-    ['التاريخ', dateText],
-    ['مقدم الطلب', params.requesterName],
+    ['نوع الطلب', params.categoryLabel],
+    ['عنوان الطلب', params.requestTitle],
+    ['التاريخ', formatDate(params.createdAt)],
+    ['مقدم الطلب', params.requesterName || '—'],
     ['الإدارة', 'إدارة عمليات التدريب'],
-    ['البريد الإلكتروني', params.requesterEmail],
-    ['الجوال', params.requesterMobile],
-    ['الصفة الوظيفية', params.requesterJobTitle],
-    ['الموقع', params.location],
-    ['العنصر المطلوب', params.itemName],
-    ['وصف الطلب', params.description],
-  ] as Array<[string, string]>;
-
+    ['البريد الإلكتروني', params.requesterEmail || '—'],
+    ['الجوال', params.requesterMobile || '—'],
+    ['الصفة الوظيفية', params.requesterJobTitle || '—'],
+    ['الموقع', params.location || '—'],
+    ['العنصر المطلوب', params.itemName || '—'],
+    ['سبب الطلب', params.description || '—'],
+  ];
   if (params.adminNotes) rows.push(['توجيه المدير', params.adminNotes]);
-  if (params.attachmentLabels.length) rows.push(['المرفقات المرفوعة', params.attachmentLabels.join('، ')]);
+  if (params.attachments.length) rows.push(['المرفقات المرفوعة', params.attachments.join('، ')]);
 
   const tableRows = rows
     .map(
-      ([field, value]) => `<tr>
-        <td style="padding:10px 12px;border:1px solid #d6d7d4;font-weight:700;background:#f8fbfb;width:190px;vertical-align:top;">${escapeHtml(field)}</td>
-        <td style="padding:10px 12px;border:1px solid #d6d7d4;vertical-align:top;">${escapeHtml(value)}</td>
-      </tr>`
+      ([label, value]) =>
+        `<tr><td style="padding:10px 12px;border:1px solid #d6d7d4;font-weight:700;background:#f8fbfb;width:190px;">${escapeHtml(label)}</td><td style="padding:10px 12px;border:1px solid #d6d7d4;">${escapeHtml(value)}</td></tr>`
     )
     .join('');
 
   return `
-  <div dir="rtl" style="font-family:Cairo,Tahoma,Arial,sans-serif;color:#1f2937;line-height:1.95;font-size:15px;">
-    <div style="font-size:18px;font-weight:700;margin-bottom:14px;">${escapeHtml(params.label)}</div>
-    <div style="margin-bottom:12px;">السلام عليكم ورحمة الله وبركاته،</div>
-    <div style="margin-bottom:12px;">تحية طيبة وبعد،</div>
-    <div style="margin-bottom:12px;">
-      نرفع إلى سعادتكم هذا الطلب الوارد من الموظف <strong>${escapeHtml(params.requesterName)}</strong> بإدارة عمليات التدريب،
-      والمتعلق بـ<strong>${escapeHtml(params.requestType)}</strong>، آملين التكرم بالاطلاع على التفاصيل أدناه واتخاذ ما ترونه مناسبًا حيال معالجته في أسرع وقت ممكن.
-    </div>
-    ${params.attachmentLabels.length ? `<div style="margin-bottom:12px;">وقد أُرفقت مع هذه المسودة المرفقات ذات الصلة التالية: <strong>${escapeHtml(params.attachmentLabels.join('، '))}</strong>.</div>` : ''}
+  <div dir="rtl" style="font-family:Cairo,Tahoma,Arial,sans-serif;color:#152625;line-height:2;">
+    <div style="font-size:20px;font-weight:800;margin-bottom:10px;">${escapeHtml(params.toLabel)}</div>
+    <div style="margin-bottom:10px;">السلام عليكم ورحمة الله وبركاته،</div>
+    <div style="margin-bottom:10px;">تحية طيبة وبعد،</div>
+    <div style="margin-bottom:14px;">نفيد سعادتكم بأن الموظف <strong>${escapeHtml(params.requesterName || 'مقدم الطلب')}</strong> من <strong>إدارة عمليات التدريب</strong> رفع ${escapeHtml(params.categoryLabel)}، ونأمل من سعادتكم التكرم بالاطلاع على التفاصيل الموضحة أدناه واتخاذ ما يلزم حيال المعالجة في أقرب وقت ممكن.</div>
     <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px;">${tableRows}</table>
-    <div style="margin-top:14px;">شاكرين لكم تعاونكم، وتفضلوا بقبول خالص التحية والتقدير.</div>
+    ${params.attachments.length ? `<div style="margin-top:10px;">مرفق مع هذه الرسالة ${escapeHtml(params.attachments.join('، '))}.</div>` : ''}
+    <div style="margin-top:16px;">وتفضلوا بقبول خالص التحية والتقدير.</div>
     <div style="margin-top:18px;font-weight:700;">فريق عمل إدارة عمليات التدريب<br/>وكالة الجامعة للتدريب</div>
   </div>`;
 }
 
-function buildEmailText(params: {
-  label: string;
-  requestCode: string;
-  requestType: string;
-  title: string;
-  createdAt: Date;
-  requesterName: string;
-  requesterEmail: string;
-  requesterMobile: string;
-  requesterJobTitle: string;
-  location: string;
-  itemName: string;
-  description: string;
-  adminNotes: string;
-  attachmentLabels: string[];
+function buildDraftEml(params: {
+  to: string;
+  subject: string;
+  htmlBody: string;
+  attachments: AttachmentPayload[];
 }) {
-  const dateText = new Intl.DateTimeFormat('ar-SA', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  }).format(new Date(params.createdAt));
+  const mixedBoundary = `----=_Mixed_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const altBoundary = `----=_Alt_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const plainBody = stripHtmlToText(params.htmlBody);
 
-  const lines = [
-    params.label,
+  const lines: string[] = [
+    `To: ${sanitizeHeader(params.to)}`,
+    `Subject: ${sanitizeHeader(params.subject)}`,
+    'MIME-Version: 1.0',
+    'X-Unsent: 1',
+    `Content-Type: multipart/mixed; boundary="${mixedBoundary}"`,
     '',
-    'السلام عليكم ورحمة الله وبركاته،',
+    `--${mixedBoundary}`,
+    `Content-Type: multipart/alternative; boundary="${altBoundary}"`,
     '',
-    'تحية طيبة وبعد،',
+    `--${altBoundary}`,
+    'Content-Type: text/plain; charset=UTF-8',
+    'Content-Transfer-Encoding: 8bit',
     '',
-    `نرفع إلى سعادتكم هذا الطلب الوارد من الموظف ${params.requesterName} بإدارة عمليات التدريب، والمتعلق بـ${params.requestType}، آملين التكرم بالاطلاع على التفاصيل أدناه واتخاذ ما ترونه مناسبًا حيال معالجته.`,
+    plainBody,
     '',
-    `رقم الطلب: ${params.requestCode}`,
-    `نوع الطلب: ${params.requestType}`,
-    `عنوان الطلب: ${params.title}`,
-    `التاريخ: ${dateText}`,
-    `مقدم الطلب: ${params.requesterName}`,
-    'الإدارة: إدارة عمليات التدريب',
-    `البريد الإلكتروني: ${params.requesterEmail}`,
-    `الجوال: ${params.requesterMobile}`,
-    `الصفة الوظيفية: ${params.requesterJobTitle}`,
-    `الموقع: ${params.location}`,
-    `العنصر المطلوب: ${params.itemName}`,
-    `وصف الطلب: ${params.description}`,
+    `--${altBoundary}`,
+    'Content-Type: text/html; charset=UTF-8',
+    'Content-Transfer-Encoding: 8bit',
+    '',
+    params.htmlBody,
+    '',
+    `--${altBoundary}--`,
+    '',
   ];
 
-  if (params.adminNotes) lines.push(`توجيه المدير: ${params.adminNotes}`);
-  if (params.attachmentLabels.length) lines.push(`المرفقات المرفوعة: ${params.attachmentLabels.join('، ')}`);
+  params.attachments.forEach((file, index) => {
+    const filename = safeAttachmentFilename(file, index);
+    lines.push(
+      `--${mixedBoundary}`,
+      `Content-Type: ${sanitizeHeader(file.contentType || 'application/octet-stream')}; name="${filename}"`,
+      'Content-Transfer-Encoding: base64',
+      `Content-Disposition: attachment; filename="${filename}"`,
+      '',
+      String(file.base64Content || '').replace(/\s+/g, ''),
+      ''
+    );
+  });
 
-  lines.push('', 'شاكرين لكم تعاونكم، وتفضلوا بقبول خالص التحية والتقدير.', '', 'فريق عمل إدارة عمليات التدريب', 'وكالة الجامعة للتدريب');
+  lines.push(`--${mixedBoundary}--`, '');
   return lines.join('\r\n');
 }
 
-function sanitizeSubject(value?: string | null) {
-  return String(value || 'مسودة مراسلة').replace(/[\r\n]+/g, ' ').trim();
+function findRelatedSuggestion(draft: any, suggestions: any[]) {
+  return (
+    suggestions.find((item) => item.id === draft.sourceId) ||
+    suggestions.find((item) => {
+      const admin = parseJsonObject(item.adminNotes);
+      return admin.linkedDraftId === draft.id || admin.linkedEntityId === draft.sourceId;
+    }) ||
+    null
+  );
 }
 
-function safeAsciiFilename(value: string) {
-  const cleaned = String(value || 'email-draft')
-    .replace(/[^A-Za-z0-9._-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 80);
-  return cleaned || 'email-draft';
-}
-
-export async function GET(
-  _request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
-
     const draft = await prisma.emailDraft.findUnique({ where: { id } });
-    if (!draft) {
-      return NextResponse.json({ error: 'المسودة غير موجودة' }, { status: 404 });
-    }
+    if (!draft) return NextResponse.json({ error: 'المراسلة غير موجودة' }, { status: 404 });
 
     const suggestions = await prisma.suggestion.findMany({
       select: {
         id: true,
         title: true,
         description: true,
+        justification: true,
+        adminNotes: true,
         category: true,
         requesterId: true,
         createdAt: true,
-        justification: true,
-        adminNotes: true,
+        status: true,
       },
     });
-
-    const suggestion = suggestions.find((item) => {
-      const adminData = parseJsonObject(item.adminNotes);
-      return String(adminData.linkedDraftId || '') === id || item.id === draft.sourceId || String(adminData.linkedEntityId || '') === draft.sourceId;
-    });
-
-    const requester = suggestion
-      ? await prisma.user.findUnique({
-          where: { id: suggestion.requesterId },
-          select: { fullName: true, email: true, mobile: true, jobTitle: true },
-        })
+    const suggestion = findRelatedSuggestion(draft, suggestions);
+    const justification = parseJsonObject(suggestion?.justification);
+    const admin = parseJsonObject(suggestion?.adminNotes);
+    const requester = suggestion?.requesterId
+      ? await prisma.user.findUnique({ where: { id: suggestion.requesterId }, select: { fullName: true, email: true, phone: true, position: true } })
       : null;
 
-    const justification = parseJsonObject(suggestion?.justification);
-    const adminData = parseJsonObject(suggestion?.adminNotes);
-    const attachments = Array.isArray(justification.attachments) ? (justification.attachments as AttachmentPayload[]) : [];
-    const attachmentLabels = attachments.map((file, index) => simplifyAttachmentName(file, index));
-    const category = normalizeCategory(suggestion?.category || draft.sourceType);
-    const requestCode = String(adminData.linkedCode || justification.publicCode || draft.sourceId || '').trim() || draft.id;
-    const requestType = requestTypeLabel(category);
-    const title = String(suggestion?.title || requestType || draft.subject || 'طلب تشغيلي').trim();
-    const bodyHtml = buildEmailHtml({
-      label: recipientLabel(category),
+    const attachmentPayloads = normalizeAttachments(justification.attachments);
+    const attachmentLabels = attachmentPayloads.map(attachmentDisplayName);
+    const requestCode = String(admin.linkedCode || justification.publicCode || draft.sourceId || draft.id);
+    const typeLabel = categoryLabel(suggestion?.category || draft.sourceType);
+    const htmlBody = buildHtml({
+      toLabel: recipientLabel(suggestion?.category || draft.sourceType),
       requestCode,
-      requestType,
-      title,
-      createdAt: suggestion?.createdAt || draft.createdAt,
-      requesterName: requester?.fullName || '—',
-      requesterDepartment: 'إدارة عمليات التدريب',
-      requesterEmail: requester?.email || '—',
-      requesterMobile: requester?.mobile || '—',
-      requesterJobTitle: requester?.jobTitle || '—',
-      location: String(justification.location || '—'),
-      itemName: String(justification.itemName || suggestion?.title || '—'),
-      description: String(suggestion?.description || '—'),
-      adminNotes: String(adminData.adminNotes || '').trim(),
-      attachmentLabels,
-    });
-    const bodyText = buildEmailText({
-      label: recipientLabel(category),
-      requestCode,
-      requestType,
-      title,
+      requestTitle: suggestion?.title || draft.subject,
+      categoryLabel: typeLabel,
       createdAt: suggestion?.createdAt || draft.createdAt,
       requesterName: requester?.fullName || '—',
       requesterEmail: requester?.email || '—',
-      requesterMobile: requester?.mobile || '—',
-      requesterJobTitle: requester?.jobTitle || '—',
+      requesterMobile: requester?.phone || '—',
+      requesterJobTitle: requester?.position || '—',
       location: String(justification.location || '—'),
       itemName: String(justification.itemName || suggestion?.title || '—'),
       description: String(suggestion?.description || '—'),
-      adminNotes: String(adminData.adminNotes || '').trim(),
-      attachmentLabels,
+      adminNotes: String(admin.adminNotes || '').trim(),
+      attachments: attachmentLabels,
     });
 
-    const subject = sanitizeSubject(`${requestType} - ${requestCode}`);
-    const to = String(draft.recipient || '').trim();
-    const outerBoundary = `mixed_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    const altBoundary = `alt_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-
-    const parts: string[] = [
-      `To: ${to}`,
-      'MIME-Version: 1.0',
-      'X-Unsent: 1',
-      `Subject: ${subject}`,
-      `Content-Type: multipart/mixed; boundary="${outerBoundary}"`,
-      '',
-      `--${outerBoundary}`,
-      `Content-Type: multipart/alternative; boundary="${altBoundary}"`,
-      '',
-      `--${altBoundary}`,
-      'Content-Type: text/plain; charset=UTF-8',
-      'Content-Transfer-Encoding: 8bit',
-      '',
-      bodyText,
-      '',
-      `--${altBoundary}`,
-      'Content-Type: text/html; charset=UTF-8',
-      'Content-Transfer-Encoding: 8bit',
-      '',
-      bodyHtml,
-      '',
-      `--${altBoundary}--`,
-    ];
-
-    attachments.forEach((attachment, index) => {
-      const base64Content = String(attachment?.base64Content || '').trim();
-      if (!base64Content) return;
-      const mime = String(attachment?.contentType || 'application/octet-stream').trim();
-      const niceName = simplifyAttachmentName(attachment, index);
-      const encodedName = encodeURIComponent(niceName);
-      parts.push(
-        `--${outerBoundary}`,
-        `Content-Type: ${mime}; name*=UTF-8''${encodedName}`,
-        'Content-Transfer-Encoding: base64',
-        `Content-Disposition: attachment; filename*=UTF-8''${encodedName}`,
-        '',
-        wrapBase64(base64Content),
-        ''
-      );
+    const eml = buildDraftEml({
+      to: draft.recipient,
+      subject: `${typeLabel} - ${requestCode}`,
+      htmlBody,
+      attachments: attachmentPayloads,
     });
-
-    parts.push(`--${outerBoundary}--`, '');
-
-    const eml = parts.join('\r\n');
-    const bytes = new TextEncoder().encode(eml);
 
     await prisma.emailDraft.update({
-      where: { id },
-      data: {
-        body: bodyHtml,
-        subject,
-        status: 'COPIED',
-        copiedAt: new Date(),
-      },
+      where: { id: draft.id },
+      data: { status: 'COPIED', copiedAt: new Date(), body: htmlBody },
     });
 
-    if (suggestion) {
-      await prisma.suggestion.update({
-        where: { id: suggestion.id },
-        data: { status: 'IMPLEMENTED' },
-      });
-    }
+    const filename = `${String(requestCode || 'draft').replace(/[^a-zA-Z0-9._-]+/g, '-')}.eml`;
+    const bytes = new TextEncoder().encode(eml);
 
-    const downloadName = `${safeAsciiFilename(requestCode)}.eml`;
     return new NextResponse(bytes, {
       status: 200,
       headers: {
         'Content-Type': 'message/rfc822',
-        'Content-Length': String(bytes.byteLength),
-        'Content-Disposition': `attachment; filename="${downloadName}"; filename*=UTF-8''${encodeURIComponent(downloadName)}`,
-        'Cache-Control': 'no-store',
+        'Content-Disposition': `attachment; filename="${filename}"`,
       },
     });
   } catch (error: any) {
-    return NextResponse.json(
-      { error: error?.message || 'تعذر تنزيل ملف المراسلة حاليًا' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: error?.message || 'تعذر تنزيل ملف المراسلة' }, { status: 500 });
   }
 }
