@@ -1,150 +1,128 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { DraftStatus } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 
-function parseJsonObject(value?: string | null) {
-  if (!value) return {} as Record<string, any>;
+const CATEGORY_LABELS: Record<string, string> = {
+  MAINTENANCE: 'طلب صيانة',
+  CLEANING: 'طلب نظافة',
+  PURCHASE: 'طلب شراء مباشر',
+  OTHER: 'طلب آخر',
+};
+
+function parseJsonObject(value?: string | null): Record<string, any> {
+  if (!value) return {};
   try {
-    const parsed = JSON.parse(String(value));
+    const parsed = JSON.parse(value);
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
   } catch {
-    return {} as Record<string, any>;
+    return {};
   }
 }
 
-function attachmentLabelFromName(filename: string, index: number) {
-  const lower = String(filename || '').toLowerCase();
-  if (/(\.png|\.jpg|\.jpeg|\.gif|\.webp|\.bmp|\.svg)$/.test(lower)) return `صورة مرفقة ${index}`;
-  if (/(\.mp4|\.mov|\.avi|\.mkv|\.webm)$/.test(lower)) return `فيديو مرفق ${index}`;
-  if (/\.pdf$/.test(lower)) return `ملف PDF مرفق ${index}`;
-  return `مرفق ${index}`;
+function stripHtml(html?: string | null) {
+  return String(html || '')
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<\/div>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
-function simplifyAttachmentNames(html?: string | null) {
-  let output = String(html || '');
-  const matches = output.match(/[a-z0-9]{8}-[a-z0-9-]{27,}\.[a-z0-9]+/gi) || [];
-  const labels = new Map<string, string>();
-  let counter = 1;
+function attachmentLabel(name: string, index: number) {
+  const lower = name.toLowerCase();
+  if (/\.(png|jpe?g|gif|webp|bmp|svg)$/.test(lower)) return `صورة مرفقة ${index + 1}`;
+  if (/\.(mp4|mov|avi|mkv|webm|m4v)$/.test(lower)) return `فيديو مرفق ${index + 1}`;
+  if (/\.pdf$/.test(lower)) return `ملف PDF مرفق ${index + 1}`;
+  return `ملف مرفق ${index + 1}`;
+}
 
-  for (const match of matches) {
-    if (!labels.has(match)) {
-      labels.set(match, attachmentLabelFromName(match, counter));
-      counter += 1;
-    }
-  }
-
-  for (const [raw, label] of labels.entries()) {
-    output = output.split(raw).join(label);
-  }
-
-  return output;
+function simplifyAttachments(raw: any): string[] {
+  const list = Array.isArray(raw) ? raw : [];
+  return list.map((item, index) => {
+    const filename = typeof item === 'string'
+      ? item
+      : String(item?.fileName || item?.name || item?.url || item?.path || `file-${index + 1}`);
+    return attachmentLabel(filename, index);
+  });
 }
 
 export async function GET(_request: NextRequest) {
   try {
-    const drafts = await prisma.emailDraft.findMany({
-      orderBy: { createdAt: 'desc' },
-    });
+    const [drafts, suggestions, users] = await Promise.all([
+      prisma.emailDraft.findMany({ orderBy: { createdAt: 'desc' } }),
+      prisma.suggestion.findMany({
+        select: {
+          id: true,
+          title: true,
+          description: true,
+          category: true,
+          status: true,
+          requesterId: true,
+          createdAt: true,
+          updatedAt: true,
+          justification: true,
+          adminNotes: true,
+        },
+      }),
+      prisma.user.findMany({
+        select: {
+          id: true,
+          fullName: true,
+          email: true,
+          mobile: true,
+          department: true,
+          jobTitle: true,
+        },
+      }),
+    ]);
 
-    const suggestions = await prisma.suggestion.findMany({
-      select: {
-        id: true,
-        title: true,
-        category: true,
-        description: true,
-        requesterId: true,
-        justification: true,
-        adminNotes: true,
-        createdAt: true,
-      },
-    });
+    const usersMap = new Map(users.map((user) => [user.id, user]));
 
-    const linkedMap = new Map<string, {
-      title: string;
-      category: string;
-      description: string;
-      requesterId: string;
-      itemName: string;
-      location: string;
-      createdAt: Date;
-    }>();
-
-    const requesterIds = new Set<string>();
-
-    for (const suggestion of suggestions) {
-      requesterIds.add(suggestion.requesterId);
-      const admin = parseJsonObject(suggestion.adminNotes);
-      const justification = parseJsonObject(suggestion.justification);
-      const linkedDraftId = String(admin.linkedDraftId || '').trim();
-      if (!linkedDraftId) continue;
-
-      linkedMap.set(linkedDraftId, {
-        title: suggestion.title,
-        category: suggestion.category,
-        description: suggestion.description,
-        requesterId: suggestion.requesterId,
-        itemName: String(justification.itemName || ''),
-        location: String(justification.location || ''),
-        createdAt: suggestion.createdAt,
+    const rows = drafts.map((draft) => {
+      const linkedSuggestion = suggestions.find((suggestion) => {
+        const admin = parseJsonObject(suggestion.adminNotes);
+        return (
+          admin.linkedDraftId === draft.id ||
+          suggestion.id === draft.sourceId ||
+          admin.linkedEntityId === draft.sourceId
+        );
       });
-    }
 
-    const users = await prisma.user.findMany({
-      where: { id: { in: [...requesterIds] } },
-      select: {
-        id: true,
-        fullName: true,
-        email: true,
-        department: true,
-        mobile: true,
-        jobTitle: true,
-      },
-    });
-
-    const userMap = new Map(users.map((user) => [user.id, user]));
-
-    const data = drafts.map((draft) => {
-      const linked = linkedMap.get(draft.id) || null;
-      const requester = linked ? userMap.get(linked.requesterId) || null : null;
+      const justification = parseJsonObject(linkedSuggestion?.justification);
+      const admin = parseJsonObject(linkedSuggestion?.adminNotes);
+      const requester = linkedSuggestion ? usersMap.get(linkedSuggestion.requesterId) : null;
+      const category = String(linkedSuggestion?.category || '').toUpperCase();
+      const snippet = stripHtml(linkedSuggestion?.description || draft.body).slice(0, 180);
 
       return {
         id: draft.id,
         subject: draft.subject,
         to: draft.recipient,
-        cc: null,
-        body: simplifyAttachmentNames(draft.body),
+        body: draft.body,
         status: draft.status,
         createdAt: draft.createdAt,
-        updatedAt: draft.copiedAt || draft.createdAt,
-        sourceType: draft.sourceType,
-        sourceId: draft.sourceId,
-        requestTitle: linked?.title || draft.subject,
-        requestType: linked?.category || draft.sourceType,
-        requestDescription: linked?.description || '',
-        itemName: linked?.itemName || '',
-        location: linked?.location || '',
-        requester: requester
-          ? {
-              fullName: requester.fullName,
-              email: requester.email,
-              department: requester.department,
-              mobile: requester.mobile,
-              extension: '',
-              jobTitle: requester.jobTitle,
-            }
-          : null,
+        copiedAt: draft.copiedAt,
+        requestCode: String(admin.linkedCode || justification.publicCode || linkedSuggestion?.id || draft.sourceId),
+        requestType: CATEGORY_LABELS[category] || 'مراسلة خارجية',
+        requesterName: requester?.fullName || '—',
+        requesterEmail: requester?.email || '—',
+        requesterMobile: requester?.mobile || '—',
+        requesterDepartment: requester?.department || '—',
+        requesterJobTitle: requester?.jobTitle || '—',
+        location: String(justification.location || '—'),
+        itemName: String(justification.itemName || '—'),
+        description: linkedSuggestion?.description || snippet || '—',
+        attachments: simplifyAttachments(justification.attachments),
       };
     });
 
-    return NextResponse.json({
-      data,
-      stats: {
-        total: data.length,
-        drafts: data.filter((row) => row.status === DraftStatus.DRAFT).length,
-        copied: data.filter((row) => row.status === DraftStatus.COPIED).length,
-        sent: data.filter((row) => row.status === DraftStatus.SENT).length,
-      },
-    });
+    return NextResponse.json({ data: rows });
   } catch (error: any) {
     return NextResponse.json(
       { error: error?.message || 'تعذر جلب المراسلات الخارجية' },

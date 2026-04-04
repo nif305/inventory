@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { DraftStatus, SuggestionStatus } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 
 function sanitizeHeader(value?: string | null) {
@@ -26,80 +25,86 @@ function stripHtmlToText(html?: string | null) {
     .trim();
 }
 
-function buildBoundary() {
-  return `----=_NextDraft_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+function parseJsonObject(value?: string | null): Record<string, any> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function buildDraftEml(params: { to: string; subject: string; htmlBody: string; textBody: string }) {
+  const boundary = `----=_NextDraft_${Date.now()}`;
+  return [
+    'X-Unsent: 1',
+    `To: ${params.to}`,
+    `Subject: ${params.subject}`,
+    'MIME-Version: 1.0',
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/plain; charset="UTF-8"',
+    'Content-Transfer-Encoding: 8bit',
+    '',
+    params.textBody,
+    '',
+    `--${boundary}`,
+    'Content-Type: text/html; charset="UTF-8"',
+    'Content-Transfer-Encoding: 8bit',
+    '',
+    params.htmlBody,
+    '',
+    `--${boundary}--`,
+    '',
+  ].join('\r\n');
 }
 
 export async function GET(
   _request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
+  context: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params;
+    const { id } = await context.params;
 
     const draft = await prisma.emailDraft.findUnique({ where: { id } });
     if (!draft) {
       return NextResponse.json({ error: 'المسودة غير موجودة' }, { status: 404 });
     }
 
-    const subject = sanitizeHeader(draft.subject || 'مسودة مراسلة');
     const to = sanitizeHeader(draft.recipient || '');
+    const subject = sanitizeHeader(draft.subject || 'مسودة مراسلة');
     const htmlBody = String(draft.body || '');
-    const textBody = stripHtmlToText(htmlBody);
-    const boundary = buildBoundary();
+    const textBody = stripHtmlToText(htmlBody) || ' '; // بعض العملاء لا يفتحون المسودة بدون متن نصي
 
-    const eml = [
-      'X-Unsent: 1',
-      `To: ${to}`,
-      `Subject: ${subject}`,
-      'MIME-Version: 1.0',
-      `Content-Type: multipart/alternative; boundary="${boundary}"`,
-      '',
-      `--${boundary}`,
-      'Content-Type: text/plain; charset=UTF-8',
-      'Content-Transfer-Encoding: 8bit',
-      '',
-      textBody,
-      '',
-      `--${boundary}`,
-      'Content-Type: text/html; charset=UTF-8',
-      'Content-Transfer-Encoding: 8bit',
-      '',
-      htmlBody,
-      '',
-      `--${boundary}--`,
-      '',
-    ].join('\r\n');
+    const eml = buildDraftEml({ to, subject, htmlBody, textBody });
 
     await prisma.emailDraft.update({
       where: { id: draft.id },
       data: {
-        status: DraftStatus.COPIED,
+        status: 'COPIED',
         copiedAt: new Date(),
       },
     });
 
     const suggestions = await prisma.suggestion.findMany({
-      where: { adminNotes: { contains: draft.id } },
-      select: { id: true, justification: true },
+      where: { status: 'APPROVED' },
+      select: { id: true, status: true, justification: true, adminNotes: true },
     });
 
-    for (const suggestion of suggestions) {
-      let justification: Record<string, any> = {};
-      try {
-        justification = JSON.parse(String(suggestion.justification || '{}'));
-      } catch {
-        justification = {};
-      }
+    const linkedSuggestion = suggestions.find((suggestion) => {
+      const admin = parseJsonObject(suggestion.adminNotes);
+      return admin.linkedDraftId === draft.id || suggestion.id === draft.sourceId || admin.linkedEntityId === draft.sourceId;
+    });
 
+    if (linkedSuggestion) {
+      const justification = parseJsonObject(linkedSuggestion.justification);
       await prisma.suggestion.update({
-        where: { id: suggestion.id },
+        where: { id: linkedSuggestion.id },
         data: {
-          status: SuggestionStatus.IMPLEMENTED,
-          justification: JSON.stringify({
-            ...justification,
-            attachments: [],
-          }),
+          status: 'IMPLEMENTED',
+          justification: JSON.stringify({ ...justification, attachments: [] }),
         },
       });
     }
@@ -113,11 +118,12 @@ export async function GET(
       headers: {
         'Content-Type': 'message/rfc822; charset=utf-8',
         'Content-Disposition': `attachment; filename="${filename}"`,
+        'Cache-Control': 'no-store',
       },
     });
   } catch (error: any) {
     return NextResponse.json(
-      { error: error?.message || 'تعذر تصدير ملف EML' },
+      { error: error?.message || 'تعذر تنزيل ملف المراسلة حاليًا' },
       { status: 500 }
     );
   }
