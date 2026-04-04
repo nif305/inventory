@@ -1,165 +1,170 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { SuggestionStatus } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 
 type JsonObject = Record<string, any>;
 
-function parseJsonObject(value: any): JsonObject {
+type RequesterInfo = {
+  fullName?: string;
+  email?: string;
+  mobile?: string;
+  department?: string;
+  jobTitle?: string;
+};
+
+function parseJsonObject(value: unknown): JsonObject {
   if (!value) return {};
-  if (typeof value === 'object' && !Array.isArray(value)) return value;
+  if (typeof value === 'object' && !Array.isArray(value)) return value as JsonObject;
   try {
     const parsed = JSON.parse(String(value));
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as JsonObject) : {};
   } catch {
     return {};
   }
 }
 
-function sanitizeHeader(value?: string | null) {
-  return String(value || '').replace(/[\r\n]+/g, ' ').trim();
+function normalizeSuggestionCategory(value?: string | null) {
+  const normalized = String(value || '').trim().toUpperCase();
+  if (normalized === 'MAINTENANCE') return 'MAINTENANCE';
+  if (normalized === 'CLEANING') return 'CLEANING';
+  if (normalized === 'PURCHASE') return 'PURCHASE';
+  return 'OTHER';
 }
 
-function stripHtmlToText(html?: string | null) {
-  return String(html || '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/tr>/gi, '\n')
-    .replace(/<\/p>/gi, '\n')
-    .replace(/<\/div>/gi, '\n')
-    .replace(/<li>/gi, '• ')
-    .replace(/<\/li>/gi, '\n')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/\n{3,}/g, '\n\n')
-    .replace(/[ \t]{2,}/g, ' ')
-    .trim();
-}
-
-function foldBase64(value: string) {
-  return String(value || '').replace(/(.{76})/g, '$1\r\n');
+function requestTypeLabel(category?: string | null, sourceType?: string | null) {
+  const normalized = normalizeSuggestionCategory(category || sourceType);
+  if (normalized === 'MAINTENANCE') return 'طلب صيانة';
+  if (normalized === 'CLEANING') return 'طلب نظافة';
+  if (normalized === 'PURCHASE') return 'طلب شراء مباشر';
+  return 'طلب آخر';
 }
 
 function attachmentLabel(file: any, index: number) {
   const type = String(file?.contentType || file?.type || '').toLowerCase();
-  const name = String(file?.filename || '').toLowerCase();
-  if (type.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name)) return `image-${index + 1}`;
-  if (type.startsWith('video/') || /\.(mp4|mov|avi|mkv|webm|wmv)$/i.test(name)) return `video-${index + 1}`;
-  if (type.includes('pdf') || /\.pdf$/i.test(name)) return `document-${index + 1}.pdf`;
-  return sanitizeHeader(file?.filename || `attachment-${index + 1}`) || `attachment-${index + 1}`;
+  const name = String(file?.filename || file?.name || '').toLowerCase();
+  if (type.startsWith('image/') || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name)) return `صورة مرفقة ${index + 1}`;
+  if (type.startsWith('video/') || /\.(mp4|mov|avi|mkv|webm|wmv)$/i.test(name)) return `فيديو مرفق ${index + 1}`;
+  if (type.includes('pdf') || /\.pdf$/i.test(name)) return `ملف PDF مرفق ${index + 1}`;
+  return `مرفق ${index + 1}`;
 }
 
-function buildAsciiFilename(subject: string, requestCode: string) {
-  const safeBase = sanitizeHeader(`${requestCode || 'request'}-draft`)
-    .replace(/[^a-zA-Z0-9._-]+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 80);
-  return `${safeBase || 'email-draft'}.eml`;
+function toSafeString(value: unknown, fallback = '—') {
+  const text = String(value ?? '').trim();
+  return text || fallback;
 }
 
-export async function GET(
-  _request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+function buildRow(params: {
+  draft: any;
+  suggestion: any | null;
+  requester: RequesterInfo | null;
+}) {
+  const { draft, suggestion, requester } = params;
+  const adminData = parseJsonObject(suggestion?.adminNotes);
+  const justification = parseJsonObject(suggestion?.justification);
+
+  const requestCode =
+    toSafeString(adminData.linkedCode, '') ||
+    toSafeString(justification.publicCode, '') ||
+    toSafeString(suggestion?.id, '') ||
+    toSafeString(draft.sourceId, '') ||
+    draft.id;
+
+  const requestType = requestTypeLabel(suggestion?.category, draft.sourceType);
+  const attachments = Array.isArray(justification.attachments)
+    ? justification.attachments.map((file: any, index: number) => attachmentLabel(file, index))
+    : [];
+
+  const requesterName = toSafeString(requester?.fullName || justification.requesterName || '');
+  const requesterEmail = toSafeString(requester?.email || justification.requesterEmail || '');
+  const requesterMobile = toSafeString(requester?.mobile || justification.requesterMobile || '');
+  const requesterDepartment = 'إدارة عمليات التدريب';
+  const requesterJobTitle = toSafeString(requester?.jobTitle || justification.requesterJobTitle || '');
+  const location = toSafeString(justification.location || justification.area || '');
+  const itemName = toSafeString(justification.itemName || justification.items || '');
+  const description = toSafeString(suggestion?.description || justification.description || justification.reason || '');
+
+  return {
+    id: draft.id,
+    subject: toSafeString(draft.subject || `${requestType} - ${requestCode}`),
+    to: toSafeString(draft.recipient || '', ''),
+    status: draft.status,
+    createdAt: draft.createdAt,
+    copiedAt: draft.copiedAt,
+    requestCode,
+    requestTypeLabel: requestType,
+    requesterName,
+    requesterDepartment,
+    requesterEmail,
+    requesterMobile,
+    requesterJobTitle,
+    location,
+    itemName,
+    description,
+    attachments,
+    body: String(draft.body || ''),
+  };
+}
+
+export async function GET(_request: NextRequest) {
   try {
-    const { id } = await params;
-
-    const draft = await prisma.emailDraft.findUnique({ where: { id } });
-    if (!draft) {
-      return NextResponse.json({ error: 'المسودة غير موجودة' }, { status: 404 });
-    }
-
-    const suggestions = await prisma.suggestion.findMany();
-    const suggestion = suggestions.find((item) => {
-      const adminData = parseJsonObject(item.adminNotes);
-      return String(adminData.linkedDraftId || '') === String(draft.id) || String(item.id) === String(draft.sourceId);
-    }) || null;
-
-    const justificationData = parseJsonObject(suggestion?.justification);
-    const adminData = parseJsonObject(suggestion?.adminNotes);
-    const requestCode = String(adminData.linkedCode || justificationData.publicCode || suggestion?.id || draft.sourceId || draft.id);
-
-    const htmlBody = String(draft.body || '');
-    const textBody = stripHtmlToText(htmlBody);
-    const to = sanitizeHeader(draft.recipient || '');
-    const subject = sanitizeHeader(draft.subject || `مراسلة خارجية - ${requestCode}`);
-
-    const boundaryMixed = `mixed_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    const boundaryAlt = `alt_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-    const attachments = Array.isArray(justificationData.attachments) ? justificationData.attachments : [];
-
-    const parts: string[] = [
-      `To: ${to}`,
-      'MIME-Version: 1.0',
-      'X-Unsent: 1',
-      `Subject: ${subject}`,
-      `Content-Type: multipart/mixed; boundary="${boundaryMixed}"`,
-      '',
-      `--${boundaryMixed}`,
-      `Content-Type: multipart/alternative; boundary="${boundaryAlt}"`,
-      '',
-      `--${boundaryAlt}`,
-      'Content-Type: text/plain; charset="UTF-8"',
-      'Content-Transfer-Encoding: 8bit',
-      '',
-      textBody,
-      '',
-      `--${boundaryAlt}`,
-      'Content-Type: text/html; charset="UTF-8"',
-      'Content-Transfer-Encoding: 8bit',
-      '',
-      htmlBody,
-      '',
-      `--${boundaryAlt}--`,
-    ];
-
-    attachments.forEach((file: any, index: number) => {
-      const base64Content = String(file?.base64Content || '').trim();
-      if (!base64Content) return;
-      const contentType = sanitizeHeader(file?.contentType || 'application/octet-stream');
-      const filename = attachmentLabel(file, index);
-      parts.push(
-        '',
-        `--${boundaryMixed}`,
-        `Content-Type: ${contentType}; name="${filename}"`,
-        'Content-Transfer-Encoding: base64',
-        `Content-Disposition: attachment; filename="${filename}"`,
-        '',
-        foldBase64(base64Content)
-      );
+    const drafts = await prisma.emailDraft.findMany({
+      orderBy: { createdAt: 'desc' },
     });
 
-    parts.push('', `--${boundaryMixed}--`, '');
-    const eml = parts.join('\r\n');
-    const body = new TextEncoder().encode(eml);
-    const filename = buildAsciiFilename(subject, requestCode);
-
-    await prisma.emailDraft.update({
-      where: { id: draft.id },
-      data: { status: 'COPIED', copiedAt: new Date() },
-    });
-
-    if (suggestion) {
-      await prisma.suggestion.update({
-        where: { id: suggestion.id },
-        data: { status: SuggestionStatus.IMPLEMENTED },
-      });
-    }
-
-    return new NextResponse(body, {
-      status: 200,
-      headers: {
-        'Content-Type': 'message/rfc822',
-        'Content-Disposition': `attachment; filename="${filename}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
-        'Content-Length': String(body.byteLength),
-        'Cache-Control': 'no-store',
+    const suggestions = await prisma.suggestion.findMany({
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        justification: true,
+        category: true,
+        requesterId: true,
+        adminNotes: true,
+        createdAt: true,
       },
     });
+
+    const linkedDraftMap = new Map<string, any>();
+    const suggestionById = new Map<string, any>();
+    const requesterIds = new Set<string>();
+
+    for (const suggestion of suggestions) {
+      suggestionById.set(String(suggestion.id), suggestion);
+      if (suggestion.requesterId) requesterIds.add(String(suggestion.requesterId));
+      const adminData = parseJsonObject(suggestion.adminNotes);
+      const linkedDraftId = String(adminData.linkedDraftId || '').trim();
+      if (linkedDraftId) linkedDraftMap.set(linkedDraftId, suggestion);
+    }
+
+    const requesterRows = requesterIds.size
+      ? await prisma.user.findMany({
+          where: { id: { in: Array.from(requesterIds) } },
+          select: {
+            id: true,
+            fullName: true,
+            email: true,
+            mobile: true,
+            department: true,
+            jobTitle: true,
+          },
+        })
+      : [];
+
+    const requesterMap = new Map(requesterRows.map((row) => [String(row.id), row]));
+
+    const data = drafts.map((draft) => {
+      const suggestion =
+        linkedDraftMap.get(String(draft.id)) ||
+        suggestionById.get(String(draft.sourceId)) ||
+        null;
+      const requester = suggestion?.requesterId ? requesterMap.get(String(suggestion.requesterId)) || null : null;
+      return buildRow({ draft, suggestion, requester });
+    });
+
+    return NextResponse.json({ data });
   } catch (error: any) {
-    return NextResponse.json({ error: error?.message || 'تعذر تنزيل ملف المراسلة حاليًا' }, { status: 500 });
+    return NextResponse.json(
+      { error: error?.message || 'تعذر تحميل المراسلات الخارجية حاليًا' },
+      { status: 500 }
+    );
   }
 }
