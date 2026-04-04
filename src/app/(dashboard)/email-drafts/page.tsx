@@ -198,16 +198,16 @@ export default function EmailDraftsPage() {
         )}
       </section>
 
-      <Modal isOpen={!!selected} onClose={() => setSelected(null)} title={selected ? `تفاصيل المراسلة: ${selected.subject}` : 'تفاصيل المراسلة'} size="full">
+      <Modal isOpen={!!selected} onClose={() => setSelected(null)} title={selected ? `تفاصيل المراسلة: ${selected.subject}` : 'تفاصيل المراسلة'} size="full" bodyClassName="sm:p-7">
         {selected ? (
-          <div className="grid gap-6 xl:grid-cols-[1fr_1.2fr]">
+          <div className="grid gap-6 2xl:grid-cols-[0.95fr_1.45fr]">
             <div className="space-y-4">
-              <div className="grid gap-3 sm:grid-cols-2">
+              <div className="grid gap-3 lg:grid-cols-2">
                 {[
                   ['الموضوع', selected.subject],
                   ['رقم الطلب', selected.requestCode],
                   ['نوع الطلب', selected.requestTypeLabel],
-                  ['إلى', selected.to || '—'],
+                  ['الجهة الموجّه إليها', selected.to || '—'],
                   ['مقدم الطلب', selected.requesterName],
                   ['الإدارة', selected.requesterDepartment],
                   ['البريد الإلكتروني', selected.requesterEmail],
@@ -216,6 +216,7 @@ export default function EmailDraftsPage() {
                   ['الموقع', selected.location],
                   ['العنصر المطلوب', selected.itemName],
                   ['تاريخ الإنشاء', formatDate(selected.createdAt)],
+                  ['آخر تحديث للحالة', formatDate(selected.copiedAt)],
                 ].map(([label, value]) => (
                   <div key={label} className="rounded-[18px] border border-[#e7ebea] bg-white px-4 py-3">
                     <div className="text-xs font-bold text-[#016564]">{label}</div>
@@ -234,7 +235,7 @@ export default function EmailDraftsPage() {
             </div>
             <div className="rounded-[22px] border border-[#d6d7d4] bg-[#f8fbfb] p-4">
               <div className="mb-3 text-sm font-bold text-[#016564]">المذكرة الجاهزة للإرسال</div>
-              <div className="prose prose-sm max-w-none text-right leading-8" dir="rtl" dangerouslySetInnerHTML={{ __html: selected.body }} />
+              <div className="max-w-none text-right text-[14px] leading-8 text-[#304342] sm:text-[15px]" dir="rtl" dangerouslySetInnerHTML={{ __html: selected.body }} />
             </div>
           </div>
         ) : null}
