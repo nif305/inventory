@@ -1,14 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { Role, Status } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 
 type JsonObject = Record<string, any>;
+type SuggestionCategory = 'MAINTENANCE' | 'CLEANING' | 'PURCHASE' | 'OTHER';
 
-type AttachmentLike = {
-  filename?: string;
-  contentType?: string;
-};
+function mapRole(role: string): Role {
+  const normalized = String(role || '').trim().toLowerCase();
+  if (normalized === 'manager') return Role.MANAGER;
+  if (normalized === 'warehouse') return Role.WAREHOUSE;
+  return Role.USER;
+}
 
-function parseJsonObject(value: any): JsonObject {
+function parseJsonObject(value: unknown): JsonObject {
   if (!value) return {};
   if (typeof value === 'object' && !Array.isArray(value)) return value as JsonObject;
   try {
@@ -19,143 +23,147 @@ function parseJsonObject(value: any): JsonObject {
   }
 }
 
-function mapCategoryLabel(category?: string | null) {
-  const normalized = String(category || '').trim().toUpperCase();
-  if (normalized === 'MAINTENANCE') return 'طلب صيانة';
-  if (normalized === 'CLEANING') return 'طلب نظافة';
-  if (normalized === 'PURCHASE') return 'طلب شراء مباشر';
-  if (normalized === 'OTHER') return 'طلب آخر';
-  if (normalized === 'MAINTENANCE'.toLowerCase()) return 'طلب صيانة';
-  if (normalized === 'CLEANING'.toLowerCase()) return 'طلب نظافة';
-  if (normalized === 'PURCHASE'.toLowerCase()) return 'طلب شراء مباشر';
-  return 'طلب';
+async function resolveSessionUser(request: NextRequest) {
+  const cookieId = decodeURIComponent(request.cookies.get('user_id')?.value || '').trim();
+  const cookieEmail = decodeURIComponent(request.cookies.get('user_email')?.value || '').trim();
+  const cookieEmployeeId = decodeURIComponent(request.cookies.get('user_employee_id')?.value || '').trim();
+  const activeRoleRaw = decodeURIComponent(
+    request.headers.get('x-active-role') ||
+      request.cookies.get('server_active_role')?.value ||
+      request.cookies.get('active_role')?.value ||
+      request.cookies.get('user_role')?.value ||
+      'user'
+  ).trim();
+
+  const activeRole = mapRole(activeRoleRaw);
+
+  let user = null as any;
+  if (cookieId) {
+    user = await prisma.user.findUnique({
+      where: { id: cookieId },
+      select: { id: true, roles: true, status: true },
+    });
+  }
+  if (!user && cookieEmail) {
+    user = await prisma.user.findFirst({
+      where: { email: { equals: cookieEmail, mode: 'insensitive' } },
+      select: { id: true, roles: true, status: true },
+    });
+  }
+  if (!user && cookieEmployeeId) {
+    user = await prisma.user.findUnique({
+      where: { employeeId: cookieEmployeeId },
+      select: { id: true, roles: true, status: true },
+    });
+  }
+
+  if (!user) throw new Error('تعذر التحقق من المستخدم الحالي.');
+  if (user.status !== Status.ACTIVE) throw new Error('الحساب غير نشط.');
+  if (!Array.isArray(user.roles) || !user.roles.includes(activeRole)) throw new Error('الدور النشط غير صالح.');
+  return { ...user, role: activeRole };
 }
 
-function simplifyAttachmentName(item: AttachmentLike, index: number) {
-  const contentType = String(item?.contentType || '').toLowerCase();
-  const filename = String(item?.filename || '').toLowerCase();
-  const isImage = contentType.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|svg)$/.test(filename);
-  const isVideo = contentType.startsWith('video/') || /\.(mp4|mov|avi|mkv|webm)$/.test(filename);
-  const isPdf = contentType.includes('pdf') || filename.endsWith('.pdf');
-  if (isImage) return `صورة مرفقة ${index + 1}`;
-  if (isVideo) return `فيديو مرفق ${index + 1}`;
-  if (isPdf) return `ملف PDF مرفق ${index + 1}`;
+function normalizeCategory(value: unknown): SuggestionCategory {
+  const normalized = String(value || '').trim().toUpperCase();
+  if (normalized === 'MAINTENANCE') return 'MAINTENANCE';
+  if (normalized === 'CLEANING') return 'CLEANING';
+  if (normalized === 'PURCHASE') return 'PURCHASE';
+  return 'OTHER';
+}
+
+function categoryLabel(category: SuggestionCategory) {
+  switch (category) {
+    case 'MAINTENANCE':
+      return 'طلب صيانة';
+    case 'CLEANING':
+      return 'طلب نظافة';
+    case 'PURCHASE':
+      return 'طلب شراء مباشر';
+    default:
+      return 'طلب آخر';
+  }
+}
+
+function formatAttachmentLabel(item: any, index: number) {
+  const rawName = String(item?.name || item?.filename || item?.fileName || item?.url || item || '').toLowerCase();
+  const ext = rawName.split('.').pop() || '';
+  if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) return `صورة مرفقة ${index + 1}`;
+  if (['mp4', 'mov', 'avi', 'mkv', 'webm', 'm4v'].includes(ext)) return `فيديو مرفق ${index + 1}`;
+  if (ext === 'pdf') return `ملف PDF مرفق ${index + 1}`;
   return `ملف مرفق ${index + 1}`;
 }
 
-function stripHtml(html?: string | null) {
-  return String(html || '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n')
-    .replace(/<\/div>/gi, '\n')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/[ \t]{2,}/g, ' ')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-export async function GET(_request: NextRequest) {
+export async function GET(request: NextRequest) {
   try {
-    const drafts = await prisma.emailDraft.findMany({
-      orderBy: { createdAt: 'desc' },
-    });
-
-    if (!drafts.length) {
-      return NextResponse.json({ data: [] });
+    const sessionUser = await resolveSessionUser(request);
+    if (sessionUser.role !== Role.MANAGER) {
+      return NextResponse.json({ error: 'غير مصرح' }, { status: 403 });
     }
 
+    const drafts = await prisma.emailDraft.findMany({ orderBy: { createdAt: 'desc' } });
     const suggestions = await prisma.suggestion.findMany({
-      where: {
-        OR: [
-          { id: { in: drafts.map((draft) => draft.sourceId) } },
-          { adminNotes: { not: null } },
-        ],
-      },
       orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        title: true,
+        description: true,
+        category: true,
+        requesterId: true,
+        justification: true,
+        adminNotes: true,
+      },
     });
 
-    const suggestionById = new Map(suggestions.map((suggestion) => [suggestion.id, suggestion]));
-    const suggestionByDraftId = new Map<string, (typeof suggestions)[number]>();
-    const suggestionByLinkedEntityId = new Map<string, (typeof suggestions)[number]>();
-
+    const suggestionByDraftId = new Map<string, any>();
+    const suggestionById = new Map<string, any>();
+    const suggestionByLinkedEntityId = new Map<string, any>();
     for (const suggestion of suggestions) {
-      const adminData = parseJsonObject(suggestion.adminNotes);
-      const linkedDraftId = String(adminData.linkedDraftId || '').trim();
-      const linkedEntityId = String(adminData.linkedEntityId || '').trim();
-      if (linkedDraftId) suggestionByDraftId.set(linkedDraftId, suggestion);
-      if (linkedEntityId) suggestionByLinkedEntityId.set(linkedEntityId, suggestion);
+      const admin = parseJsonObject(suggestion.adminNotes);
+      if (admin.linkedDraftId) suggestionByDraftId.set(String(admin.linkedDraftId), suggestion);
+      suggestionById.set(String(suggestion.id), suggestion);
+      if (admin.linkedEntityId) suggestionByLinkedEntityId.set(String(admin.linkedEntityId), suggestion);
     }
 
-    const requesterIds = [...new Set(suggestions.map((suggestion) => suggestion.requesterId).filter(Boolean))];
-    const requesters = requesterIds.length
-      ? await prisma.user.findMany({
-          where: { id: { in: requesterIds } },
-          select: {
-            id: true,
-            fullName: true,
-            email: true,
-            mobile: true,
-            department: true,
-            jobTitle: true,
-          },
-        })
-      : [];
+    const requesterIds = [...new Set(suggestions.map((item) => item.requesterId).filter(Boolean))];
+    const users = await prisma.user.findMany({
+      where: { id: { in: requesterIds } },
+      select: { id: true, fullName: true, email: true, mobile: true, jobTitle: true },
+    });
+    const userMap = new Map(users.map((user) => [user.id, user]));
 
-    const requesterMap = new Map(requesters.map((requester) => [requester.id, requester]));
-
-    const data = drafts.map((draft) => {
-      const suggestion =
-        suggestionByDraftId.get(draft.id) ||
-        suggestionById.get(draft.sourceId) ||
-        suggestionByLinkedEntityId.get(draft.sourceId) ||
-        null;
-
-      const justificationData = parseJsonObject(suggestion?.justification);
-      const adminData = parseJsonObject(suggestion?.adminNotes);
-      const requester = suggestion ? requesterMap.get(suggestion.requesterId) || null : null;
-      const attachments = Array.isArray(justificationData.attachments)
-        ? justificationData.attachments.map((item: AttachmentLike, index: number) => simplifyAttachmentName(item, index))
+    const rows = drafts.map((draft) => {
+      const suggestion = suggestionByDraftId.get(draft.id) || suggestionById.get(draft.sourceId) || suggestionByLinkedEntityId.get(draft.sourceId) || null;
+      const justification = parseJsonObject(suggestion?.justification);
+      const admin = parseJsonObject(suggestion?.adminNotes);
+      const requester = suggestion?.requesterId ? userMap.get(suggestion.requesterId) : null;
+      const category = normalizeCategory(suggestion?.category || draft.sourceType);
+      const attachments = Array.isArray(justification.attachments)
+        ? justification.attachments.map((item: any, index: number) => formatAttachmentLabel(item, index))
         : [];
-
-      const requestType = mapCategoryLabel(suggestion?.category || draft.sourceType);
-      const requestCode = String(adminData.linkedCode || justificationData.publicCode || draft.subject || draft.sourceId);
-      const previewSource = String(suggestion?.description || stripHtml(draft.body) || '').trim();
 
       return {
         id: draft.id,
         subject: draft.subject,
         to: draft.recipient,
-        cc: null,
         body: draft.body,
         status: draft.status,
         createdAt: draft.createdAt,
-        updatedAt: draft.copiedAt || draft.createdAt,
-        requestCode,
-        requestType,
+        requestCode: String(admin.linkedCode || justification.publicCode || draft.sourceId || draft.id),
+        requestType: categoryLabel(category),
         requesterName: requester?.fullName || '—',
+        requesterDepartment: 'إدارة عمليات التدريب',
         requesterEmail: requester?.email || '—',
         requesterMobile: requester?.mobile || '—',
-        requesterDepartment: requester?.department || '—',
         requesterJobTitle: requester?.jobTitle || '—',
-        location: String(justificationData.location || '—'),
-        itemName: String(justificationData.itemName || '—'),
-        description: suggestion?.description || '—',
+        location: String(justification.location || '—'),
+        itemName: String(justification.itemName || suggestion?.title || '—'),
+        description: String(suggestion?.description || '—'),
         attachments,
-        preview: previewSource.length > 180 ? `${previewSource.slice(0, 180)}...` : previewSource,
       };
     });
 
-    return NextResponse.json({ data });
+    return NextResponse.json({ data: rows });
   } catch (error: any) {
-    return NextResponse.json(
-      { error: error?.message || 'تعذر جلب المراسلات الخارجية' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: error?.message || 'تعذر جلب المراسلات الخارجية' }, { status: 500 });
   }
 }

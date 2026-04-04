@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { DraftStatus, SuggestionStatus } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 
 function sanitizeHeader(value?: string | null) {
@@ -26,50 +25,44 @@ function stripHtmlToText(html?: string | null) {
     .trim();
 }
 
-function escapeHtml(value?: string | null) {
-  return String(value || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+function parseJsonObject(value: unknown): Record<string, any> {
+  if (!value) return {};
+  if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, any>;
+  try {
+    const parsed = JSON.parse(String(value));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
-function toSafeAsciiFilename(value?: string | null) {
-  const normalized = String(value || 'email-draft')
-    .replace(/[^a-zA-Z0-9\-_\. ]+/g, '-')
-    .replace(/\s+/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^[-.]+|[-.]+$/g, '')
-    .slice(0, 80);
-
-  return normalized || 'email-draft';
+function buildAttachmentNote(justification: Record<string, any>) {
+  const attachments = Array.isArray(justification.attachments) ? justification.attachments : [];
+  if (!attachments.length) return '';
+  return '\n\nملاحظة: توجد مرفقات مرفوعة ضمن الطلب الأصلي في النظام، ويُرجى الرجوع إليها عند الحاجة.';
 }
 
-export async function GET(
-  _request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
+export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
+    const draft = await prisma.emailDraft.findUnique({ where: { id } });
+    if (!draft) return NextResponse.json({ error: 'المسودة غير موجودة' }, { status: 404 });
 
-    const draft = await prisma.emailDraft.findUnique({
-      where: { id },
-    });
-
-    if (!draft) {
-      return NextResponse.json({ error: 'المسودة غير موجودة' }, { status: 404 });
-    }
+    const suggestions = await prisma.suggestion.findMany({ select: { id: true, justification: true, adminNotes: true } });
+    const linkedSuggestion = suggestions.find((item) => String(parseJsonObject(item.adminNotes).linkedDraftId || '') === id);
+    const justification = parseJsonObject(linkedSuggestion?.justification);
 
     const subject = sanitizeHeader(draft.subject || 'مسودة مراسلة');
     const to = sanitizeHeader(draft.recipient || '');
     const htmlBody = String(draft.body || '');
-    const textBody = stripHtmlToText(htmlBody);
-    const boundary = `----=_NAUSS_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    const textBody = stripHtmlToText(htmlBody) + buildAttachmentNote(justification);
+    const boundary = `----=_NAUSS_${Date.now()}`;
 
     const eml = [
       'X-Unsent: 1',
       `To: ${to}`,
-      `Subject: ${subject}`,
       'MIME-Version: 1.0',
+      `Subject: ${subject}`,
       `Content-Type: multipart/alternative; boundary="${boundary}"`,
       '',
       `--${boundary}`,
@@ -82,80 +75,36 @@ export async function GET(
       'Content-Type: text/html; charset=UTF-8',
       'Content-Transfer-Encoding: 8bit',
       '',
-      `<html><body dir="rtl">${htmlBody || `<pre>${escapeHtml(textBody)}</pre>`}</body></html>`,
+      htmlBody,
       '',
       `--${boundary}--`,
       '',
     ].join('\r\n');
 
-    const filenameBase = toSafeAsciiFilename(subject);
-    const utf8Filename = encodeURIComponent(`${subject || 'email-draft'}.eml`);
-
-    await prisma.$transaction(async (tx) => {
-      await tx.emailDraft.update({
-        where: { id: draft.id },
+    await prisma.emailDraft.update({ where: { id }, data: { status: 'COPIED', copiedAt: new Date() } });
+    if (linkedSuggestion) {
+      const admin = parseJsonObject(linkedSuggestion.adminNotes);
+      await prisma.suggestion.update({
+        where: { id: linkedSuggestion.id },
         data: {
-          status: DraftStatus.COPIED,
-          copiedAt: new Date(),
+          status: 'IMPLEMENTED',
+          justification: JSON.stringify({ ...justification, attachments: [] }),
+          adminNotes: JSON.stringify({ ...admin, downloadedAt: new Date().toISOString() }),
         },
       });
-
-      const linkedSuggestion = await tx.suggestion.findFirst({
-        where: {
-          OR: [
-            { id: draft.sourceId },
-            { adminNotes: { contains: draft.id } },
-          ],
-        },
-      });
-
-      if (linkedSuggestion) {
-        const adminData = (() => {
-          try {
-            return linkedSuggestion.adminNotes ? JSON.parse(linkedSuggestion.adminNotes) : {};
-          } catch {
-            return {};
-          }
-        })();
-        const justificationData = (() => {
-          try {
-            return linkedSuggestion.justification ? JSON.parse(linkedSuggestion.justification) : {};
-          } catch {
-            return {};
-          }
-        })();
-
-        await tx.suggestion.update({
-          where: { id: linkedSuggestion.id },
-          data: {
-            status: SuggestionStatus.IMPLEMENTED,
-            adminNotes: JSON.stringify({
-              ...adminData,
-              draftDownloadedAt: new Date().toISOString(),
-            }),
-            justification: JSON.stringify({
-              ...justificationData,
-              attachments: [],
-            }),
-          },
-        });
-      }
-    });
+    }
 
     const bytes = new TextEncoder().encode(eml);
-
+    const safeName = `email-draft-${id}.eml`;
     return new NextResponse(bytes, {
       status: 200,
       headers: {
         'Content-Type': 'message/rfc822',
-        'Content-Disposition': `attachment; filename="${filenameBase}.eml"; filename*=UTF-8''${utf8Filename}`,
+        'Content-Disposition': `attachment; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`,
         'Cache-Control': 'no-store',
       },
     });
   } catch (error: any) {
-    return NextResponse.json(
-      { error: error?.message || 'تعذر تصدير ملف EML' },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: error?.message || 'تعذر تصدير ملف EML' }, { status: 500 });
   }
 }

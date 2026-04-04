@@ -135,21 +135,21 @@ async function generateLinkedCode(category: SuggestionCategory) {
   for (const row of suggestionRows) {
     const parsed = parseJsonObject(row.adminNotes);
     const code = String(parsed.linkedCode || '');
-    const match = code.match(new RegExp(`^${prefix}-${year}-(\\d{4})$`));
+    const match = code.match(new RegExp(`^${prefix}-${year}-(\d{4})$`));
     if (match) maxSerial = Math.max(maxSerial, Number(match[1]));
   }
 
   const maintenanceRows = await prisma.maintenanceRequest.findMany({ select: { code: true } });
   for (const row of maintenanceRows) {
     const code = String(row.code || '');
-    const match = code.match(new RegExp(`^${prefix}-${year}-(\\d{4})$`));
+    const match = code.match(new RegExp(`^${prefix}-${year}-(\d{4})$`));
     if (match) maxSerial = Math.max(maxSerial, Number(match[1]));
   }
 
   const purchaseRows = await prisma.purchaseRequest.findMany({ select: { code: true } });
   for (const row of purchaseRows) {
     const code = String(row.code || '');
-    const match = code.match(new RegExp(`^${prefix}-${year}-(\\d{4})$`));
+    const match = code.match(new RegExp(`^${prefix}-${year}-(\d{4})$`));
     if (match) maxSerial = Math.max(maxSerial, Number(match[1]));
   }
 
@@ -168,6 +168,7 @@ function buildNotificationTitle(category: SuggestionCategory) {
 
 function buildExternalEmailHtml(params: {
   recipientLabel: string;
+  introLine?: string;
   requestCode: string;
   requestTitle: string;
   createdAt: Date;
@@ -185,33 +186,31 @@ function buildExternalEmailHtml(params: {
 }) {
   const rows = [
     ['رقم الطلب', params.requestCode],
-    ['نوع الطلب', params.requestTitle],
+    ['عنوان الطلب', params.requestTitle],
     ['التاريخ', new Intl.DateTimeFormat('ar-SA', { year: 'numeric', month: 'long', day: 'numeric' }).format(new Date(params.createdAt))],
-    ['مقدم الطلب', params.requesterName || '—'],
-    ['الإدارة', params.requesterDepartment || '—'],
+    ['مقدم الطلب', params.requesterName],
+    ['الإدارة', 'إدارة عمليات التدريب'],
     ['البريد الإلكتروني', params.requesterEmail || '—'],
     ['الجوال', params.requesterMobile || '—'],
     ['الصفة الوظيفية', params.requesterJobTitle || '—'],
     ['الموقع', params.location || '—'],
     ['العنصر المطلوب', params.itemName || '—'],
-    ['وصف الطلب', params.description || '—'],
+    ['سبب الطلب', params.description || '—'],
   ];
   if (params.justification) rows.push(['إيضاحات إضافية', params.justification]);
   if (params.adminNotes) rows.push(['توجيه المدير', params.adminNotes]);
   if (params.attachments?.length) rows.push(['المرفقات المرفوعة', params.attachments.join('، ')]);
 
-  const tableRows = rows
-    .map(([label, value]) => `<tr><td style="padding:10px 12px;border:1px solid #d6d7d4;font-weight:700;background:#f8fbfb;width:190px;">${label}</td><td style="padding:10px 12px;border:1px solid #d6d7d4;">${value}</td></tr>`)
-    .join('');
+  const tableRows = rows.map(([label, value]) => `<tr><td style="padding:10px 12px;border:1px solid #d6d7d4;font-weight:700;background:#f8fbfb;width:180px;">${label}</td><td style="padding:10px 12px;border:1px solid #d6d7d4;">${value}</td></tr>`).join('');
 
   return `
   <div dir="rtl" style="font-family:Cairo,Tahoma,Arial,sans-serif;color:#1f2937;line-height:2;">
-    <div style="font-size:20px;font-weight:700;margin-bottom:12px;">${params.recipientLabel}</div>
-    <div style="margin-bottom:14px;">السلام عليكم ورحمة الله وبركاته،</div>
-    <div style="margin-bottom:14px;">تهديكم إدارة عمليات التدريب أطيب التحايا، وتضع بين أيديكم هذا الطلب المرفوع من الموظف الموضحة بياناته أدناه، آملين التكرم بالاطلاع عليه والتوجيه بما يلزم حيال معالجته، مع إمكان التواصل المباشر مع مقدم الطلب عند الحاجة.</div>
-    <table style="width:100%;border-collapse:collapse;margin:18px 0;font-size:14px;">${tableRows}</table>
-    <div style="margin-top:14px;">وتفضلوا بقبول خالص التقدير والاحترام.</div>
-    <div style="margin-top:20px;font-weight:700;">فريق عمل إدارة عمليات التدريب<br/>وكالة الجامعة للتدريب</div>
+    <div style="font-size:18px;font-weight:700;margin-bottom:12px;">${params.recipientLabel}</div>
+    <div style="margin-bottom:12px;">السلام عليكم ورحمة الله وبركاته،</div>
+    <div style="margin-bottom:12px;">تهديكم إدارة عمليات التدريب أطيب التحايا، وتفيدكم بأن الموظف <strong>${params.requesterName}</strong> قد رفع الطلب الموضحة بياناته أدناه، وتأمل من سعادتكم التكرم بالاطلاع عليه والتوجيه بما يلزم حيال معالجته على الوجه المناسب، مع إمكان التواصل المباشر مع مقدم الطلب عند الحاجة.</div>
+    <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px;">${tableRows}</table>
+    <div style="margin-top:14px;">ولكم خالص الشكر والتقدير، وتقبلوا أطيب التحايا.</div>
+    <div style="margin-top:18px;font-weight:700;">فريق عمل إدارة عمليات التدريب<br/>وكالة الجامعة للتدريب</div>
   </div>`;
 }
 
@@ -407,8 +406,7 @@ export async function PATCH(request: NextRequest) {
     const category = normalizeCategory(suggestion.category);
     const publicCode = String(justificationData.publicCode || adminData.publicCode || await generatePublicCode(category));
     const itemName = String(justificationData.itemName || '').trim();
-    const quantity = Math.max(1, Number(justificationData.quantity || 1));
-    const location = String(justificationData.location || '').trim();
+        const location = String(justificationData.location || '').trim();
     const externalRecipient = String(justificationData.externalRecipient || '').trim();
 
     if (action === 'reject') {
@@ -541,11 +539,7 @@ export async function PATCH(request: NextRequest) {
     }
 
     const recipient = buildRecipients(category, externalRecipient);
-    const recipientLabel = category === 'PURCHASE'
-      ? 'سعادة الأستاذ نواف المحارب سلمه الله'
-      : category === 'MAINTENANCE' || category === 'CLEANING'
-      ? 'سعادة مدير الخدمات المساندة سلمه الله'
-      : 'إلى من يهمه الأمر';
+    const recipientLabel = category === 'PURCHASE' ? 'سعادة الأستاذ نواف المحارب سلمه الله' : (category === 'MAINTENANCE' || category === 'CLEANING' ? 'سعادة مدير إدارة الخدمات المساندة سلمه الله' : 'إلى من يهمه الأمر');
 
     let linkedDraftId = String(adminData.linkedDraftId || '');
     let draft = null as any;
@@ -569,7 +563,7 @@ export async function PATCH(request: NextRequest) {
       requestTitle: suggestion.title,
       createdAt: suggestion.createdAt,
       requesterName: requester?.fullName || '—',
-      requesterDepartment: requester?.department || '—',
+      requesterDepartment: 'إدارة عمليات التدريب',
       requesterEmail: requester?.email || '—',
       requesterMobile: requester?.mobile || '—',
       requesterJobTitle: requester?.jobTitle || '—',
@@ -577,14 +571,7 @@ export async function PATCH(request: NextRequest) {
       itemName,
       description: suggestion.description,
       adminNotes,
-      attachments: Array.isArray(justificationData.attachments) ? justificationData.attachments.map((item: any, index: number) => {
-        const contentType = String(item?.contentType || '').toLowerCase();
-        const filename = String(item?.filename || '').toLowerCase();
-        if (contentType.startsWith('image/') || /\.(png|jpe?g|webp|gif|bmp|svg)$/.test(filename)) return `صورة مرفقة ${index + 1}`;
-        if (contentType.startsWith('video/') || /\.(mp4|mov|avi|mkv|webm)$/.test(filename)) return `فيديو مرفق ${index + 1}`;
-        if (contentType.includes('pdf') || filename.endsWith('.pdf')) return `ملف PDF مرفق ${index + 1}`;
-        return `ملف مرفق ${index + 1}`;
-      }) : [],
+      attachments: Array.isArray(justificationData.attachments) ? justificationData.attachments.map((item: any, index: number) => { const raw = String(item?.name || item?.filename || item?.fileName || item?.url || item || '').toLowerCase(); const ext = raw.split('.').pop() || ''; if (['jpg','jpeg','png','gif','webp','bmp','svg'].includes(ext)) return `صورة مرفقة ${index + 1}`; if (['mp4','mov','avi','mkv','webm','m4v'].includes(ext)) return `فيديو مرفق ${index + 1}`; if (ext === 'pdf') return `ملف PDF مرفق ${index + 1}`; return `ملف مرفق ${index + 1}`; }) : [],
     });
 
     if (draft) {
