@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { DraftStatus, SuggestionStatus } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 
 function sanitizeHeader(value?: string | null) {
@@ -25,14 +26,22 @@ function stripHtmlToText(html?: string | null) {
     .trim();
 }
 
-function safeAsciiFilename(subject: string) {
-  const base = subject
-    .normalize('NFKD')
-    .replace(/[^\x00-\x7F]/g, '')
-    .replace(/[\\/:*?"<>|]+/g, '-')
-    .replace(/\s+/g, ' ')
-    .trim();
-  return `${(base || 'email-draft').slice(0, 80)}.eml`;
+function escapeHtml(value?: string | null) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function toSafeAsciiFilename(value?: string | null) {
+  const normalized = String(value || 'email-draft')
+    .replace(/[^a-zA-Z0-9\-_\. ]+/g, '-')
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^[-.]+|[-.]+$/g, '')
+    .slice(0, 80);
+
+  return normalized || 'email-draft';
 }
 
 export async function GET(
@@ -42,7 +51,10 @@ export async function GET(
   try {
     const { id } = await params;
 
-    const draft = await prisma.emailDraft.findUnique({ where: { id } });
+    const draft = await prisma.emailDraft.findUnique({
+      where: { id },
+    });
+
     if (!draft) {
       return NextResponse.json({ error: 'المسودة غير موجودة' }, { status: 404 });
     }
@@ -51,7 +63,7 @@ export async function GET(
     const to = sanitizeHeader(draft.recipient || '');
     const htmlBody = String(draft.body || '');
     const textBody = stripHtmlToText(htmlBody);
-    const boundary = `----=_Part_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const boundary = `----=_NAUSS_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
     const eml = [
       'X-Unsent: 1',
@@ -70,30 +82,73 @@ export async function GET(
       'Content-Type: text/html; charset=UTF-8',
       'Content-Transfer-Encoding: 8bit',
       '',
-      htmlBody || textBody,
+      `<html><body dir="rtl">${htmlBody || `<pre>${escapeHtml(textBody)}</pre>`}</body></html>`,
       '',
       `--${boundary}--`,
       '',
     ].join('\r\n');
 
-    await prisma.emailDraft.update({
-      where: { id },
-      data: {
-        status: 'COPIED',
-        copiedAt: new Date(),
-      },
+    const filenameBase = toSafeAsciiFilename(subject);
+    const utf8Filename = encodeURIComponent(`${subject || 'email-draft'}.eml`);
+
+    await prisma.$transaction(async (tx) => {
+      await tx.emailDraft.update({
+        where: { id: draft.id },
+        data: {
+          status: DraftStatus.COPIED,
+          copiedAt: new Date(),
+        },
+      });
+
+      const linkedSuggestion = await tx.suggestion.findFirst({
+        where: {
+          OR: [
+            { id: draft.sourceId },
+            { adminNotes: { contains: draft.id } },
+          ],
+        },
+      });
+
+      if (linkedSuggestion) {
+        const adminData = (() => {
+          try {
+            return linkedSuggestion.adminNotes ? JSON.parse(linkedSuggestion.adminNotes) : {};
+          } catch {
+            return {};
+          }
+        })();
+        const justificationData = (() => {
+          try {
+            return linkedSuggestion.justification ? JSON.parse(linkedSuggestion.justification) : {};
+          } catch {
+            return {};
+          }
+        })();
+
+        await tx.suggestion.update({
+          where: { id: linkedSuggestion.id },
+          data: {
+            status: SuggestionStatus.IMPLEMENTED,
+            adminNotes: JSON.stringify({
+              ...adminData,
+              draftDownloadedAt: new Date().toISOString(),
+            }),
+            justification: JSON.stringify({
+              ...justificationData,
+              attachments: [],
+            }),
+          },
+        });
+      }
     });
 
-    const encoder = new TextEncoder();
-    const body = encoder.encode(eml);
-    const asciiFilename = safeAsciiFilename(subject);
+    const bytes = new TextEncoder().encode(eml);
 
-    return new NextResponse(body, {
+    return new NextResponse(bytes, {
       status: 200,
       headers: {
         'Content-Type': 'message/rfc822',
-        'Content-Disposition': `attachment; filename="${asciiFilename}"; filename*=UTF-8''${encodeURIComponent(asciiFilename)}`,
-        'Content-Length': String(body.byteLength),
+        'Content-Disposition': `attachment; filename="${filenameBase}.eml"; filename*=UTF-8''${utf8Filename}`,
         'Cache-Control': 'no-store',
       },
     });
